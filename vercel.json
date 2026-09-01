@@ -1,4 +1,5 @@
 {
+  "framework": null,
   "buildCommand": "echo 'No static build needed — api/index.ts is transpiled per-function by Vercel.'",
   "outputDirectory": "public",
   "rewrites": [{ "source": "/(.*)", "destination": "/api/index" }],
