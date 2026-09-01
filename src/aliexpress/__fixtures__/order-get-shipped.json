@@ -1,0 +1,18 @@
+{
+  "aliexpress_ds_trade_order_get_response": {
+    "result": {
+      "order_id": "8123456789012345",
+      "order_status": "WAIT_BUYER_ACCEPT_GOODS",
+      "logistics_status": "SELLER_PART_SEND_GOODS",
+      "logistics_info_d_t_o_list": {
+        "ae_order_logistics_info_d_t_o": [
+          {
+            "logistics_no": "LP00123456789CN",
+            "logistics_company_name": "AliExpress Standard Shipping",
+            "tracking_url": "https://track.example.com/LP00123456789CN"
+          }
+        ]
+      }
+    }
+  }
+}

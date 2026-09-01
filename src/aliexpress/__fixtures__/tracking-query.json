@@ -1,0 +1,15 @@
+{
+  "aliexpress_logistics_ds_tracking_info_query_response": {
+    "result": {
+      "logistics_no": "LP00123456789CN",
+      "logistics_company": "AliExpress Standard Shipping",
+      "logistics_status": "IN_TRANSIT",
+      "tracking_detail_line_list": {
+        "tracking_detail": [
+          { "event_date": "2026-08-20 09:12:00", "event_description": "Departed from facility", "location": "Shenzhen, CN" },
+          { "event_date": "2026-08-24 14:03:00", "event_description": "Arrived at destination country", "location": "Los Angeles, US" }
+        ]
+      }
+    }
+  }
+}
