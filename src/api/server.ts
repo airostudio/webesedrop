@@ -10,6 +10,7 @@ import { registerConfigRoutes } from "./routes/config";
 import { registerSyncRoutes } from "./routes/sync";
 import { registerBillingRoutes } from "./routes/billing";
 import { registerAdminRoutes } from "./routes/admin";
+import { registerCronRoutes } from "./routes/cron";
 
 declare module "fastify" {
   interface FastifyRequest {
@@ -80,6 +81,7 @@ export function buildServer(db: SupabaseClient): FastifyInstance {
   registerSyncRoutes(app, db);
   registerBillingRoutes(app, db);
   registerAdminRoutes(app, db);
+  registerCronRoutes(app, db);
 
   return app;
 }
