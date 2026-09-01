@@ -22,11 +22,12 @@ Everything else — actually creating the product listing, writing the order, ru
    ```
    Prints an API key once — store it in the connecting app's own secrets (e.g. Beach Footprints' `DROPSHIP_ENGINE_API_KEY`).
 
-2. **Connect an AliExpress account** (every store connects its own — dropshipping orders are placed, and paid for, under that account):
+2. **Connect an AliExpress account** (every store connects its own — dropshipping orders are placed, and paid for, under that account). With `ALIEXPRESS_APP_KEY`/`ALIEXPRESS_APP_SECRET` set on the engine (the platform's own AliExpress Open Platform app), a store just does steps 2–3 below — the owner logs into their own AliExpress account, nothing else to configure:
    ```
-   POST /v1/aliexpress/connection      { appKey, appSecret }
-   GET  /v1/aliexpress/authorize-url?redirectUri=...   -> { authorizeUrl }
-   POST /v1/aliexpress/callback        { code, redirectUri }
+   POST /v1/aliexpress/connection      { appKey, appSecret }   -- optional: only if this store wants its own app instead of the platform's
+   GET  /v1/aliexpress/authorize-url?redirectUri=...   -> { authorizeUrl }   -- send the store owner here to log in
+   POST /v1/aliexpress/callback        { code, redirectUri }   -- exchange the code AliExpress redirected back with
+   GET  /v1/aliexpress/status          -> { connected, connectedAt }
    ```
 
 3. **Configure pricing and brand voice** (optional — sensible defaults apply without this):
