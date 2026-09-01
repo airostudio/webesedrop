@@ -189,3 +189,98 @@ create table sync_logs (
   created_at timestamptz not null default now()
 );
 create index idx_sync_logs_store on sync_logs (store_id, created_at desc);
+
+-- ================================================================
+-- Billing — the engine's own SaaS subscription business (a store pays to
+-- use the engine), entirely separate from AliExpress order money above.
+-- Stripe is the source of truth; these tables mirror it for accounting/
+-- reporting so the admin can run reports without calling Stripe for every
+-- page load. Every row here is written only from the Stripe webhook
+-- handler (or, for plans, by an operator) — never guessed locally.
+-- ================================================================
+
+create table plans (
+  id                 uuid primary key default gen_random_uuid(),
+  name               text not null,
+  slug               text not null unique,
+  price_cents        int not null,
+  billing_interval   text not null default 'month' check (billing_interval in ('month', 'year')),
+  stripe_price_id    text unique,
+  features           jsonb not null default '{}'::jsonb,
+  is_active          boolean not null default true,
+  created_at         timestamptz not null default now()
+);
+
+create table stripe_customers (
+  store_id           uuid primary key references stores(id) on delete cascade,
+  stripe_customer_id text not null unique,
+  created_at         timestamptz not null default now()
+);
+
+create table subscriptions (
+  id                     uuid primary key default gen_random_uuid(),
+  store_id               uuid not null references stores(id) on delete cascade,
+  plan_id                uuid not null references plans(id),
+  stripe_subscription_id text not null unique,
+  status                 text not null check (status in ('trialing', 'active', 'past_due', 'canceled', 'incomplete', 'incomplete_expired', 'unpaid')),
+  current_period_start   timestamptz,
+  current_period_end     timestamptz,
+  cancel_at_period_end   boolean not null default false,
+  canceled_at            timestamptz,
+  created_at             timestamptz not null default now(),
+  updated_at             timestamptz not null default now()
+);
+create trigger trg_subscriptions_updated_at before update on subscriptions for each row execute function set_updated_at();
+create index idx_subscriptions_store on subscriptions (store_id);
+create index idx_subscriptions_status on subscriptions (status);
+
+create table invoices (
+  id                uuid primary key default gen_random_uuid(),
+  store_id          uuid not null references stores(id) on delete cascade,
+  subscription_id   uuid references subscriptions(id) on delete set null,
+  stripe_invoice_id text not null unique,
+  status            text not null check (status in ('draft', 'open', 'paid', 'uncollectible', 'void')),
+  amount_due_cents  int not null,
+  amount_paid_cents int not null default 0,
+  currency          text not null default 'usd',
+  period_start      timestamptz,
+  period_end        timestamptz,
+  hosted_invoice_url text,
+  paid_at           timestamptz,
+  created_at        timestamptz not null default now()
+);
+create index idx_invoices_store on invoices (store_id, created_at desc);
+create index idx_invoices_status on invoices (status);
+
+-- Raw Stripe webhook events, kept for audit/replay/debugging — every
+-- delivery is logged here before (and regardless of whether) it's acted on.
+create table payment_events (
+  id                uuid primary key default gen_random_uuid(),
+  stripe_event_id   text not null unique,
+  type              text not null,
+  payload           jsonb not null,
+  processed_at      timestamptz,
+  error             text,
+  created_at        timestamptz not null default now()
+);
+create index idx_payment_events_type on payment_events (type, created_at desc);
+
+-- ================================================================
+-- Domain install log — every hostname a store's integration has been seen
+-- calling from or registering a webhook for. A store can have more than
+-- one (staging + production, a domain migration, multiple storefronts
+-- under one account), so this is a log, not a single column.
+-- ================================================================
+
+create table store_domains (
+  id             uuid primary key default gen_random_uuid(),
+  store_id       uuid not null references stores(id) on delete cascade,
+  domain         text not null,
+  source         text not null check (source in ('manual', 'webhook_url', 'origin_header')),
+  first_seen_at  timestamptz not null default now(),
+  last_seen_at   timestamptz not null default now(),
+  is_active      boolean not null default true,
+  unique (store_id, domain)
+);
+create index idx_store_domains_store on store_domains (store_id);
+create index idx_store_domains_domain on store_domains (domain);
