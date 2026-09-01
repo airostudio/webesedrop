@@ -57,7 +57,48 @@ Everything else — actually creating the product listing, writing the order, ru
 
    For an admin "sync now" button: `POST /v1/sync/catalog` / `POST /v1/sync/tracking` run the scheduled jobs on demand for just the calling store and return the summary synchronously (webhooks fire before the response comes back).
 
-Every request needs `Authorization: Bearer <apiKey>` except `GET /v1/health`.
+6. **Declare a domain** (optional — registering a webhook already logs one automatically, and every authenticated request best-effort logs its `Origin`/`Referer` too; call this for a domain that wouldn't otherwise surface, e.g. a staging site with no webhook):
+   ```
+   POST /v1/domains   { domain }
+   ```
+
+Every request needs `Authorization: Bearer <apiKey>` except `GET /v1/health` and `POST /v1/billing/webhook` (Stripe-signed instead — see Billing below).
+
+## Billing (the engine's own subscription business)
+
+Separate from AliExpress order money entirely: this is what a connected store pays *the engine* to use it. Stripe is the source of truth; `subscriptions`/`invoices` mirror it for reporting. Store-facing:
+
+```
+GET  /v1/billing/plans              -> { plans: [{ id, name, priceCents, billingInterval, ... }] }
+POST /v1/billing/checkout-session   { planId, successUrl, cancelUrl } -> { checkoutUrl }
+GET  /v1/billing/subscription       -> { subscription } | { subscription: null }
+POST /v1/billing/webhook            Stripe calls this directly — verified via `stripe-signature`, not an API key
+```
+
+Configure `STRIPE_SECRET_KEY` and `STRIPE_WEBHOOK_SECRET` (see `.env.example`), then create at least one plan (`POST /v1/admin/plans`, below) with a real Stripe Price id before a store can check out.
+
+## Admin API + dashboard
+
+Everything above is a store's own view of itself. `/v1/admin/*` is the operator's view across every store — billing/accounting, the domain install log, and drill-down reports — gated by `ADMIN_API_KEY` (see `src/auth/adminAuth.ts`), never a store's own key:
+
+```
+GET  /v1/admin/overview          MRR, active/past-due subscriptions, domain count, orders + revenue this month
+GET  /v1/admin/stores            every store with plan, subscription status, MRR contribution, domain/order counts
+GET  /v1/admin/stores/:id        one store's full detail: domains, subscription, invoices, orders by status
+GET  /v1/admin/domains           the full cross-store domain log — every hostname it's installed on
+GET  /v1/admin/invoices          accounting ledger, filterable by store/status
+GET  /v1/admin/plans             POST to create a plan (name, slug, priceCents, billingInterval, stripePriceId)
+GET  /v1/admin/reports/revenue   cash collected per month (paid invoices)
+GET  /v1/admin/reports/orders    order volume per day
+GET  /v1/admin/reports/plans     current MRR broken down by plan
+```
+
+`admin/` is a small React + Vite dashboard over this API (see `admin/README.md`) — sign in with `ADMIN_API_KEY`, browse stores/domains/billing/reports. It's a separate app with its own `package.json`/install, same relationship to the engine as any storefront adapter: REST only, no shared code or database.
+
+```bash
+pnpm admin:install   # first time only
+pnpm admin:dev        # http://localhost:4100, talking to VITE_ENGINE_API_URL (admin/.env.example)
+```
 
 ## Architecture
 
@@ -91,6 +132,15 @@ src/
   cli/           create-store (operator-only store provisioning, not a
                  public endpoint — API keys are shown once, never
                  recoverable), sync:catalog, sync:tracking.
+  billing/       Stripe client wrapper (src/billing/stripe.ts) — the only
+                 place the Stripe SDK is constructed from env vars.
+  auth/          Per-store API key auth (apiKey.ts) and the separate
+                 operator-only admin auth (adminAuth.ts) — deliberately not
+                 the same mechanism; admin auth never touches `stores`.
+
+admin/           Separate React + Vite dashboard over /v1/admin/* — own
+                 package.json, own install, REST-only like any storefront
+                 adapter. See admin/README.md.
 ```
 
 ## What's implemented (MVP core)
@@ -100,11 +150,12 @@ src/
 - Idempotent order fulfillment (atomic claim — a retried or duplicated request can never place the same AliExpress order twice) and order status/tracking lookup.
 - Daily catalog sync (price/stock reconciliation, price-change log, active/out-of-stock toggling) and tracking sync (shipped/delivered detection), both per-store and firing signed webhooks on real changes.
 - Brand-voice-configurable copy rewriting with the same offline-template-fallback guarantee as the pilot.
-- 48 passing unit/integration tests (`pnpm test`) against recorded API-shaped fixtures and an in-memory Supabase-shaped fake — no live AliExpress or Supabase credentials needed to verify the logic.
+- Stripe-backed subscription billing for the engine's own SaaS business (plans, checkout, webhook-driven subscriptions/invoices), a cross-store domain install log, and an operator-only admin API + dashboard (overview, per-store drill-down, accounting ledger, revenue/orders/plan reports).
+- 80 passing unit/integration tests (`pnpm test`) against recorded API-shaped fixtures and an in-memory Supabase-shaped fake — no live AliExpress, Supabase, or Stripe credentials needed to verify the logic (Stripe webhook signature tests use its offline test-signature helper).
 
 ## What's next, not built here
 
-- **A management UI/dashboard** — everything above is API-only right now.
+- **Real operator accounts for the admin dashboard** — `ADMIN_API_KEY` is a single shared secret (see `src/auth/adminAuth.ts`); fine for one operator, not for a team.
 - **Multi-supplier mapping** (DSers' "Supplier Optimizer": one product mapped to several AliExpress listings, auto-switching if one goes out of stock).
 - **Dynamic/competitor-aware repricing** (AutoDS-style), beyond the cost-based rules here.
 - **Retry/backoff on webhook delivery** — currently one attempt, logged either way; the sync jobs naturally re-derive the same event next run, but a dead-letter/retry queue would be more robust for something like an order-shipped notification.
@@ -114,7 +165,7 @@ src/
 
 ```bash
 pnpm install
-pnpm test                         # 48 tests, no credentials needed
+pnpm test                         # 80 tests, no credentials needed
 pnpm typecheck
 
 # Against a real (separate!) Supabase project — apply supabase/schema.sql first:

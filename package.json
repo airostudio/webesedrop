@@ -14,12 +14,16 @@
     "sync:tracking": "node --import tsx src/cli/sync-tracking.ts",
     "build": "tsc -p tsconfig.json",
     "test": "vitest run",
-    "typecheck": "tsc --noEmit -p tsconfig.json"
+    "typecheck": "tsc --noEmit -p tsconfig.json",
+    "admin:install": "pnpm --dir admin install",
+    "admin:dev": "pnpm --dir admin dev",
+    "admin:build": "pnpm --dir admin build"
   },
   "dependencies": {
     "@supabase/supabase-js": "^2.45.4",
     "bullmq": "^5.22.0",
     "fastify": "^4.28.1",
+    "stripe": "^17.3.1",
     "zod": "^3.23.8"
   },
   "devDependencies": {

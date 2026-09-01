@@ -1,8 +1,10 @@
 import type { FastifyInstance } from "fastify";
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { z } from "zod";
+import { recordDomainSighting } from "../../domain/domains";
 
 const webhookSchema = z.object({ url: z.string().url(), secret: z.string().min(16) });
+const domainSchema = z.object({ domain: z.string().min(1) });
 
 const roundingSchema = z.enum(["none", "up-95", "up-99", "up-00"]);
 const pricingRuleSchema = z.object({
@@ -34,7 +36,17 @@ export function registerConfigRoutes(app: FastifyInstance, db: SupabaseClient): 
     if (!parsed.success) return reply.code(400).send({ error: parsed.error.flatten() });
 
     await db.from("stores").update({ webhook_url: parsed.data.url, webhook_secret: parsed.data.secret }).eq("id", request.store.id);
+    await recordDomainSighting(db, request.store.id, parsed.data.url, "webhook_url");
     return { registered: true };
+  });
+
+  /** Explicit domain declaration — for a store that doesn't register a webhook (or wants a staging domain logged too). Feeds the admin's domain install log. */
+  app.post("/v1/domains", async (request, reply) => {
+    const parsed = domainSchema.safeParse(request.body);
+    if (!parsed.success) return reply.code(400).send({ error: parsed.error.flatten() });
+
+    await recordDomainSighting(db, request.store.id, parsed.data.domain, "manual");
+    return reply.code(201).send({ recorded: true });
   });
 
   app.post("/v1/pricing-rules", async (request, reply) => {
