@@ -1,0 +1,44 @@
+{
+  "aliexpress_ds_product_get_response": {
+    "result": {
+      "ae_item_base_info_dto": {
+        "product_id": "1005006123456",
+        "subject": "2026 Hot Sale Sexy Floral Kimono Coverup Dropship Free Shipping!!",
+        "detail": "<p>Beautiful floral <b>kimono</b> cover up. 100% Rayon. Perfect for beach vacation.</p>",
+        "image_urls": "https://ae.example.com/img1.jpg;https://ae.example.com/img2.jpg",
+        "category_id": 200003482,
+        "currency_code": "USD"
+      },
+      "ae_item_sku_info_dtos": {
+        "ae_item_sku_info_d_t_o": [
+          {
+            "sku_id": "12000030123456789",
+            "sku_price": "16.00",
+            "sku_available_stock": 42,
+            "sku_code": "SKU-BLUE-M",
+            "currency_code": "USD",
+            "ae_sku_property_dtos": [
+              { "sku_property_id": 14, "property_value_id": 200000343, "property_value_definition_name": "Blue" },
+              { "sku_property_id": 5, "property_value_id": 100000045, "property_value_definition_name": "M" }
+            ]
+          },
+          {
+            "sku_id": "12000030123456790",
+            "sku_price": "16.00",
+            "sku_available_stock": 0,
+            "sku_code": "SKU-BLUE-L",
+            "currency_code": "USD",
+            "ae_sku_property_dtos": [
+              { "sku_property_id": 14, "property_value_id": 200000343, "property_value_definition_name": "Blue" },
+              { "sku_property_id": 5, "property_value_id": 100000046, "property_value_definition_name": "L" }
+            ]
+          }
+        ]
+      },
+      "package_info_dto": {
+        "gross_weight": "0.35",
+        "product_unit": "piece"
+      }
+    }
+  }
+}
