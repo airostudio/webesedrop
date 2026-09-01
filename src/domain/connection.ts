@@ -12,9 +12,17 @@ export async function getClientForStore(db: SupabaseClient, storeId: string): Pr
     throw new Error(`Store ${storeId} has no connected AliExpress account — complete the OAuth flow first`);
   }
 
+  // Tokens were issued under the platform app (ALIEXPRESS_APP_KEY/SECRET) unless this store
+  // registered its own — same fallback as src/api/routes/aliexpress.ts's resolveApp().
+  const appKey = (data.app_key as string | null) ?? process.env.ALIEXPRESS_APP_KEY;
+  const appSecret = (data.app_secret as string | null) ?? process.env.ALIEXPRESS_APP_SECRET;
+  if (!appKey || !appSecret) {
+    throw new Error(`Store ${storeId} has no AliExpress app credentials on file and no platform app is configured`);
+  }
+
   return new AliExpressClient({
-    appKey: data.app_key as string,
-    appSecret: data.app_secret as string,
+    appKey,
+    appSecret,
     accessToken: data.access_token as string,
     refreshToken: data.refresh_token as string,
     onTokenRefreshed: async (tokens) => {

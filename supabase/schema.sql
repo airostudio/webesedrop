@@ -41,10 +41,14 @@ create trigger trg_stores_updated_at before update on stores for each row execut
 
 -- Each store connects its own AliExpress account (dropshipping orders are
 -- placed — and paid for — under that account, so it can't be shared).
+-- app_key/app_secret are nullable: most stores use the engine's own platform
+-- app (ALIEXPRESS_APP_KEY/ALIEXPRESS_APP_SECRET env vars) and only log into
+-- their own AliExpress account during OAuth. A store only sets these if it
+-- registered its own AliExpress Open Platform app (POST /v1/aliexpress/connection).
 create table aliexpress_connections (
   store_id      uuid primary key references stores(id) on delete cascade,
-  app_key       text not null,
-  app_secret    text not null,
+  app_key       text,
+  app_secret    text,
   access_token  text,
   refresh_token text,
   connected_at  timestamptz,
