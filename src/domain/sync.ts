@@ -1,14 +1,32 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { AliExpressClient } from "../aliexpress/client";
-import { applyPricingRule, DEFAULT_PRICING_RULE, diffPriceChange, type PricingRule } from "../pricing/engine";
-import { deliverWebhook } from "./webhooks";
+import { applyPricingRule, DEFAULT_PRICING_RULE, diffPriceChange, type PriceBounds, type PricingRule } from "../pricing/engine";
+import { deliverWebhook, type WebhookEvent } from "./webhooks";
 import { getClientForStore } from "./connection";
+import { getStoreSettings, type StoreSettings } from "./settings";
 
 async function logSyncEvent(db: SupabaseClient, params: { storeId: string; mappingId?: string; event: string; detail?: unknown }): Promise<void> {
   await db.from("sync_logs").insert({ store_id: params.storeId, mapping_id: params.mappingId ?? null, event: params.event, detail: params.detail ?? null });
 }
 
-async function notifyStore(db: SupabaseClient, storeId: string, event: Parameters<typeof deliverWebhook>[1]["event"], payload: Record<string, unknown>) {
+/** Maps a webhook event to the StoreSettings.notifications toggle that gates it. */
+const NOTIFICATION_TOGGLE: Record<WebhookEvent, keyof StoreSettings["notifications"]> = {
+  "product.price_changed": "priceChanged",
+  "product.out_of_stock": "outOfStock",
+  "product.restocked": "restocked",
+  "order.shipped": "orderShipped",
+  "order.delivered": "orderDelivered",
+  "order.fulfillment_failed": "fulfillmentFailed",
+};
+
+async function notifyStore(
+  db: SupabaseClient,
+  storeId: string,
+  event: WebhookEvent,
+  payload: Record<string, unknown>,
+  settings: StoreSettings,
+) {
+  if (!settings.notifications[NOTIFICATION_TOGGLE[event]]) return;
   const { data: store } = await db.from("stores").select("webhook_url, webhook_secret").eq("id", storeId).single();
   if (!store?.webhook_url || !store?.webhook_secret) return;
   await deliverWebhook(db, { storeId, webhookUrl: store.webhook_url, webhookSecret: store.webhook_secret, event, payload });
@@ -31,6 +49,8 @@ export interface CatalogSyncSummary {
  */
 export async function runCatalogSync(db: SupabaseClient, client: AliExpressClient, storeId: string): Promise<CatalogSyncSummary> {
   const summary: CatalogSyncSummary = { storeId, mappingsChecked: 0, priceChanges: 0, markedOutOfStock: 0, restocked: 0, errors: [] };
+  const settings = await getStoreSettings(db, storeId);
+  const bounds: PriceBounds = { minPriceCents: settings.pricing.minPriceCents, maxPriceCents: settings.pricing.maxPriceCents };
 
   const { data: mappings } = await db
     .from("product_mappings")
@@ -84,6 +104,8 @@ export async function runCatalogSync(db: SupabaseClient, client: AliExpressClien
         previousPriceCents: mapping.retail_price_cents as number,
         newSupplierCostCents: newCostCents,
         rule,
+        bounds,
+        ignoreChangeBelowPercent: settings.pricing.ignorePriceChangeBelowPercent,
       });
 
       await db
@@ -101,23 +123,38 @@ export async function runCatalogSync(db: SupabaseClient, client: AliExpressClien
           new_price_cents: diff.newPriceCents,
           margin_rate: diff.marginRate,
         });
-        await notifyStore(db, storeId, "product.price_changed", {
-          externalProductId: mapping.external_product_id,
-          externalVariantId: mapping.external_variant_id,
-          previousPriceCents: diff.previousPriceCents,
-          newPriceCents: diff.newPriceCents,
-        });
+        await notifyStore(
+          db,
+          storeId,
+          "product.price_changed",
+          {
+            externalProductId: mapping.external_product_id,
+            externalVariantId: mapping.external_variant_id,
+            previousPriceCents: diff.previousPriceCents,
+            newPriceCents: diff.newPriceCents,
+          },
+          settings,
+        );
       }
 
       const wasActive = mapping.is_active as boolean;
+      const restockThreshold = settings.stock.ignoreStockChangeBelowUnits ?? 1;
       if (wasActive && sku.sku_available_stock === 0) {
-        await db.from("product_mappings").update({ is_active: false }).eq("id", mapping.id);
+        if (settings.stock.outOfStockBehavior !== "keep_visible") {
+          await db.from("product_mappings").update({ is_active: false }).eq("id", mapping.id);
+        }
         summary.markedOutOfStock += 1;
-        await notifyStore(db, storeId, "product.out_of_stock", { externalProductId: mapping.external_product_id, externalVariantId: mapping.external_variant_id });
-      } else if (!wasActive && sku.sku_available_stock > 0) {
+        await notifyStore(db, storeId, "product.out_of_stock", { externalProductId: mapping.external_product_id, externalVariantId: mapping.external_variant_id }, settings);
+      } else if (!wasActive && sku.sku_available_stock >= restockThreshold) {
         await db.from("product_mappings").update({ is_active: true }).eq("id", mapping.id);
         summary.restocked += 1;
-        await notifyStore(db, storeId, "product.restocked", { externalProductId: mapping.external_product_id, externalVariantId: mapping.external_variant_id, stockOnHand: sku.sku_available_stock });
+        await notifyStore(
+          db,
+          storeId,
+          "product.restocked",
+          { externalProductId: mapping.external_product_id, externalVariantId: mapping.external_variant_id, stockOnHand: sku.sku_available_stock },
+          settings,
+        );
       }
     }
   }
@@ -136,6 +173,7 @@ export interface TrackingSyncSummary {
 
 export async function runTrackingSync(db: SupabaseClient, client: AliExpressClient, storeId: string): Promise<TrackingSyncSummary> {
   const summary: TrackingSyncSummary = { storeId, polled: 0, shipped: 0, delivered: 0, errors: [] };
+  const settings = await getStoreSettings(db, storeId);
 
   const { data: orders } = await db
     .from("orders")
@@ -154,7 +192,7 @@ export async function runTrackingSync(db: SupabaseClient, client: AliExpressClie
         await db.from("orders").update({ fulfillment_status: "delivered" }).eq("id", order.id);
         summary.delivered += 1;
         await logSyncEvent(db, { storeId, event: "delivered" });
-        await notifyStore(db, storeId, "order.delivered", { externalOrderId: order.external_order_id });
+        await notifyStore(db, storeId, "order.delivered", { externalOrderId: order.external_order_id }, settings);
       } else if (logistics?.logistics_no) {
         await db
           .from("orders")
@@ -162,12 +200,18 @@ export async function runTrackingSync(db: SupabaseClient, client: AliExpressClie
           .eq("id", order.id);
         summary.shipped += 1;
         await logSyncEvent(db, { storeId, event: "shipped" });
-        await notifyStore(db, storeId, "order.shipped", {
-          externalOrderId: order.external_order_id,
-          trackingNumber: logistics.logistics_no,
-          carrier: logistics.logistics_company,
-          trackingUrl: logistics.tracking_url,
-        });
+        await notifyStore(
+          db,
+          storeId,
+          "order.shipped",
+          {
+            externalOrderId: order.external_order_id,
+            trackingNumber: logistics.logistics_no,
+            carrier: logistics.logistics_company,
+            trackingUrl: logistics.tracking_url,
+          },
+          settings,
+        );
       }
     } catch (err) {
       summary.errors.push({ orderId: order.id as string, message: err instanceof Error ? err.message : String(err) });

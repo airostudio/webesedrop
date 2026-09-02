@@ -31,11 +31,14 @@ Everything else — actually creating the product listing, writing the order, ru
    GET  /v1/aliexpress/status          -> { connected, connectedAt }
    ```
 
-3. **Configure pricing and brand voice** (optional — sensible defaults apply without this):
+3. **Configure pricing, brand voice, and store settings** (all optional — sensible defaults apply without this):
    ```
    POST /v1/pricing-rules   { name, isDefault, rule: { type: "percent_margin" | "fixed_markup" | "tiered_margin", ... } }
    PUT  /v1/brand-voice     { storeName, descriptors?, styleLabel?, sectionLabels?, openingLine? }
+   GET  /v1/settings        -> { settings }  -- always returns every field, defaults filled in
+   PUT  /v1/settings        { pricing?, import?, stock?, shipping?, notifications? }  -- see src/domain/settings.ts
    ```
+   `settings` covers what every competing dropshipping tool (Ali2Woo, DSers, AliDropship, Zendrop, Spocket) exposes, plus a few gaps none of them do: a hard min/max price floor/ceiling (`pricing.minPriceCents`/`maxPriceCents`), a separate compare-at/strikethrough pricing rule (`pricing.compareAtRule`), a threshold to suppress noisy sub-percent price-sync webhooks (`pricing.ignorePriceChangeBelowPercent`), what happens to a listing when AliExpress reports it out of stock (`stock.outOfStockBehavior`: `mark_unavailable` | `keep_visible`) with its own noise threshold (`stock.ignoreStockChangeBelowUnits`), a default AliExpress logistics service (`shipping.preferredLogisticsService`), and a per-event on/off switch for every webhook type (`notifications.*`).
 
 4. **Register a webhook endpoint** to receive product/order events:
    ```
@@ -133,7 +136,11 @@ src/
                  (idempotent fulfillment), sync.ts (catalog + tracking
                  sync, across every store), webhooks.ts (signed delivery),
                  connection.ts (builds a per-store AliExpress client from
-                 its stored OAuth tokens, persisting refreshes).
+                 its stored OAuth tokens, persisting refreshes),
+                 settings.ts (per-store dropshipping settings — pricing
+                 bounds/compare-at, import defaults, stock/sync behavior,
+                 shipping preference, notification toggles — read by
+                 products.ts/sync.ts/orders.ts, not just stored and ignored).
   api/           Fastify REST API — one process, framework-light so it
                  runs anywhere (not Vercel-specific, no Next.js).
   worker/        BullMQ scheduler — catalog sync daily @ 02:00 UTC,
