@@ -39,6 +39,46 @@ describe("importProduct", () => {
     expect(result.onBrandName.toLowerCase()).not.toContain("hot sale");
     expect(result.onBrandName.toLowerCase()).not.toContain("dropship");
   });
+
+  it("clamps retail price to the store's configured min/max bounds", async () => {
+    const db = new FakeSupabase() as any;
+    db.seed("stores", [{ id: STORE_ID, name: "Beach Footprints", brand_voice: null, settings: { pricing: { minPriceCents: 3000 } } }]);
+    const fetchImpl = vi.fn().mockResolvedValue(jsonResponse(productGetFixture));
+    const client = new AliExpressClient({ ...CREDENTIALS, fetchImpl });
+
+    const result = await importProduct(db, client, { storeId: STORE_ID, aliexpressProductId: "1005006123456" });
+    const inStock = result.skus.find((s) => s.aliexpressSkuId === "12000030123456789")!;
+    expect(inStock.retailPriceCents).toBe(3000); // 2195 unclamped, floor raises it to 3000
+  });
+
+  it("computes a compare-at price when the store configured a compareAtRule", async () => {
+    const db = new FakeSupabase() as any;
+    db.seed("stores", [
+      {
+        id: STORE_ID,
+        name: "Beach Footprints",
+        brand_voice: null,
+        settings: { pricing: { compareAtRule: { type: "percent_margin", marginRate: 0.6, rounding: "up-99" } } },
+      },
+    ]);
+    const fetchImpl = vi.fn().mockResolvedValue(jsonResponse(productGetFixture));
+    const client = new AliExpressClient({ ...CREDENTIALS, fetchImpl });
+
+    const result = await importProduct(db, client, { storeId: STORE_ID, aliexpressProductId: "1005006123456" });
+    const inStock = result.skus.find((s) => s.aliexpressSkuId === "12000030123456789")!;
+    expect(inStock.compareAtPriceCents).not.toBeNull();
+    expect(inStock.compareAtPriceCents!).toBeGreaterThan(inStock.retailPriceCents);
+  });
+
+  it("leaves compareAtPriceCents null when no compareAtRule is configured", async () => {
+    const db = new FakeSupabase() as any;
+    db.seed("stores", [{ id: STORE_ID, name: "Beach Footprints", brand_voice: null }]);
+    const fetchImpl = vi.fn().mockResolvedValue(jsonResponse(productGetFixture));
+    const client = new AliExpressClient({ ...CREDENTIALS, fetchImpl });
+
+    const result = await importProduct(db, client, { storeId: STORE_ID, aliexpressProductId: "1005006123456" });
+    expect(result.skus[0].compareAtPriceCents).toBeNull();
+  });
 });
 
 describe("createMapping", () => {
@@ -59,6 +99,26 @@ describe("createMapping", () => {
     expect(result.supplierCostCents).toBe(1600);
     expect(result.retailPriceCents).toBe(2195);
     expect(db.rows("product_mappings")).toHaveLength(1);
+  });
+
+  it("clamps and applies compare-at pricing from the store's settings", async () => {
+    const db = new FakeSupabase() as any;
+    db.seed("stores", [
+      { id: STORE_ID, name: "Beach Footprints", settings: { pricing: { maxPriceCents: 2000, compareAtRule: { type: "percent_margin", marginRate: 1, rounding: "none" } } } },
+    ]);
+    db.seed("ae_products", [{ aliexpress_product_id: "1005006123456", subject: "x" }]);
+    db.seed("ae_product_skus", [{ aliexpress_product_id: "1005006123456", aliexpress_sku_id: "sku-1", supplier_cost_cents: 1600 }]);
+
+    const result = await createMapping(db, {
+      storeId: STORE_ID,
+      externalProductId: "prod-1",
+      externalVariantId: "var-1",
+      aliexpressProductId: "1005006123456",
+      aliexpressSkuId: "sku-1",
+    });
+
+    expect(result.retailPriceCents).toBe(2000); // 2195 unclamped, ceiling caps it to 2000
+    expect(result.compareAtPriceCents).toBe(2000); // 3200 unclamped (100% margin), ceiling caps it too
   });
 
   it("throws for an unknown SKU rather than creating a mapping to nothing", async () => {

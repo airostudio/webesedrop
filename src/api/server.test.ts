@@ -45,6 +45,65 @@ describe("server", () => {
   });
 });
 
+describe("server: settings", () => {
+  function seedStoreWithKey(db: FakeSupabase) {
+    const apiKey = generateApiKey();
+    db.seed("stores", [{ id: "store-1", name: "Beach Footprints", slug: "beach-footprints", api_key_hash: hashApiKey(apiKey), is_active: true }]);
+    return apiKey;
+  }
+
+  it("GET returns full defaults for a store that never configured settings", async () => {
+    const db = new FakeSupabase() as any;
+    const apiKey = seedStoreWithKey(db);
+    const app = buildServer(db);
+
+    const res = await app.inject({ method: "GET", url: "/v1/settings", headers: { authorization: `Bearer ${apiKey}` } });
+    expect(res.statusCode).toBe(200);
+    expect(res.json().settings.stock.outOfStockBehavior).toBe("mark_unavailable");
+    expect(res.json().settings.notifications.priceChanged).toBe(true);
+  });
+
+  it("PUT patches a section and GET reflects it", async () => {
+    const db = new FakeSupabase() as any;
+    const apiKey = seedStoreWithKey(db);
+    const app = buildServer(db);
+
+    const put = await app.inject({
+      method: "PUT",
+      url: "/v1/settings",
+      headers: { authorization: `Bearer ${apiKey}` },
+      payload: { pricing: { minPriceCents: 1500, maxPriceCents: 9900 } },
+    });
+    expect(put.statusCode).toBe(200);
+    expect(put.json().settings.pricing.minPriceCents).toBe(1500);
+
+    const get = await app.inject({ method: "GET", url: "/v1/settings", headers: { authorization: `Bearer ${apiKey}` } });
+    expect(get.json().settings.pricing.minPriceCents).toBe(1500);
+    expect(get.json().settings.pricing.maxPriceCents).toBe(9900);
+  });
+
+  it("rejects minPriceCents greater than maxPriceCents", async () => {
+    const db = new FakeSupabase() as any;
+    const apiKey = seedStoreWithKey(db);
+    const app = buildServer(db);
+
+    const res = await app.inject({
+      method: "PUT",
+      url: "/v1/settings",
+      headers: { authorization: `Bearer ${apiKey}` },
+      payload: { pricing: { minPriceCents: 5000, maxPriceCents: 1000 } },
+    });
+    expect(res.statusCode).toBe(400);
+  });
+
+  it("requires a store API key", async () => {
+    const db = new FakeSupabase() as any;
+    const app = buildServer(db);
+    const res = await app.inject({ method: "GET", url: "/v1/settings" });
+    expect(res.statusCode).toBe(401);
+  });
+});
+
 describe("server: admin auth", () => {
   const ORIGINAL_ADMIN_KEY = process.env.ADMIN_API_KEY;
   process.env.ADMIN_API_KEY = "admin_test_key";

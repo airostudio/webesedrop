@@ -2,6 +2,7 @@ import type { SupabaseClient } from "@supabase/supabase-js";
 import { AliExpressApiError } from "../aliexpress/client";
 import { toAliExpressAddress } from "../aliexpress/address";
 import { getClientForStore } from "./connection";
+import { getStoreSettings } from "./settings";
 import type { Address } from "../types";
 
 const DEFAULT_LOGISTICS_SERVICE = "CAINIAO_STANDARD";
@@ -98,6 +99,9 @@ export async function fulfillOrder(db: SupabaseClient, params: FulfillOrderParam
     if (mappingsError) throw new Error(mappingsError.message);
     if (!mappings || mappings.length === 0) throw new Error("No product mappings found for this order's line items");
 
+    const settings = await getStoreSettings(db, params.storeId);
+    const logisticsServiceName = params.logisticsServiceName ?? settings.shipping.preferredLogisticsService ?? DEFAULT_LOGISTICS_SERVICE;
+
     const client = await getClientForStore(db, params.storeId);
     const result = await client.createOrder({
       outOrderId: orderId,
@@ -109,7 +113,7 @@ export async function fulfillOrder(db: SupabaseClient, params: FulfillOrderParam
           productId: mapping.aliexpress_product_id as string,
           skuId: mapping.aliexpress_sku_id as string,
           quantity: li.quantity,
-          logisticsServiceName: params.logisticsServiceName ?? DEFAULT_LOGISTICS_SERVICE,
+          logisticsServiceName,
         };
       }),
     });

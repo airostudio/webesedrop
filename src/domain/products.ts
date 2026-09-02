@@ -1,8 +1,9 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
 import type { AliExpressClient } from "../aliexpress/client";
 import type { AliExpressProductDetail } from "../aliexpress/types";
-import { applyPricingRule, DEFAULT_PRICING_RULE, type PricingRule } from "../pricing/engine";
+import { applyPricingRule, DEFAULT_PRICING_RULE, type PriceBounds, type PricingRule } from "../pricing/engine";
 import { rewriteProductCopy, formatStructuredDescription, type BrandVoice, type CopyProvider } from "../copy/rewriter";
+import { getStoreSettings } from "./settings";
 
 const NEUTRAL_VOICE: BrandVoice = { storeName: "Store" };
 
@@ -49,6 +50,8 @@ export interface ImportedSku {
   stockOnHand: number;
   retailPriceCents: number;
   marginRate: number;
+  /** Strikethrough/compare-at price, if the store configured pricing.compareAtRule — see src/domain/settings.ts. */
+  compareAtPriceCents: number | null;
 }
 
 export interface ImportProductResult {
@@ -78,6 +81,8 @@ export async function importProduct(
     ? ((await db.from("pricing_rules").select("rule").eq("id", params.pricingRuleId).single()).data?.rule as PricingRule)
     : await getDefaultPricingRule(db, params.storeId);
   const voice = await getBrandVoice(db, params.storeId);
+  const settings = await getStoreSettings(db, params.storeId);
+  const bounds: PriceBounds = { minPriceCents: settings.pricing.minPriceCents, maxPriceCents: settings.pricing.maxPriceCents };
 
   const { onBrandName, description } = await rewriteProductCopy(
     { rawTitle: detail.subject, rawDescriptionHtml: detail.detail, voice },
@@ -86,7 +91,10 @@ export async function importProduct(
 
   const skus: ImportedSku[] = detail.ae_item_sku_info_dtos.map((sku) => {
     const supplierCostCents = Math.round(parseFloat(sku.sku_price) * 100);
-    const pricing = applyPricingRule(supplierCostCents, rule);
+    const pricing = applyPricingRule(supplierCostCents, rule, bounds);
+    const compareAtPriceCents = settings.pricing.compareAtRule
+      ? applyPricingRule(supplierCostCents, settings.pricing.compareAtRule, bounds).retailPriceCents
+      : null;
     return {
       aliexpressSkuId: sku.sku_id,
       properties: sku.sku_properties?.map((p) => p.property_value_definition_name).join(" / ") ?? null,
@@ -94,6 +102,7 @@ export async function importProduct(
       stockOnHand: sku.sku_available_stock,
       retailPriceCents: pricing.retailPriceCents,
       marginRate: pricing.marginRate,
+      compareAtPriceCents,
     };
   });
 
@@ -121,6 +130,7 @@ export interface MappingResult {
   id: string;
   supplierCostCents: number;
   retailPriceCents: number;
+  compareAtPriceCents: number | null;
 }
 
 /** Persists the link between a store's own variant and an AliExpress SKU, pricing it with the store's chosen (or default) rule. Upserts on (store, externalVariantId) — re-mapping an existing variant updates it in place. */
@@ -136,7 +146,13 @@ export async function createMapping(db: SupabaseClient, params: CreateMappingPar
   const rule = params.pricingRuleId
     ? ((await db.from("pricing_rules").select("rule").eq("id", params.pricingRuleId).single()).data?.rule as PricingRule)
     : await getDefaultPricingRule(db, params.storeId);
-  const pricing = applyPricingRule(skuRow.supplier_cost_cents as number, rule);
+  const settings = await getStoreSettings(db, params.storeId);
+  const bounds: PriceBounds = { minPriceCents: settings.pricing.minPriceCents, maxPriceCents: settings.pricing.maxPriceCents };
+  const supplierCostCents = skuRow.supplier_cost_cents as number;
+  const pricing = applyPricingRule(supplierCostCents, rule, bounds);
+  const compareAtPriceCents = settings.pricing.compareAtRule
+    ? applyPricingRule(supplierCostCents, settings.pricing.compareAtRule, bounds).retailPriceCents
+    : null;
 
   const { data, error } = await db
     .from("product_mappings")
@@ -149,8 +165,9 @@ export async function createMapping(db: SupabaseClient, params: CreateMappingPar
         aliexpress_sku_id: params.aliexpressSkuId,
         pricing_rule_id: params.pricingRuleId ?? null,
         on_brand_name: params.onBrandName ?? null,
-        supplier_cost_cents: skuRow.supplier_cost_cents,
+        supplier_cost_cents: supplierCostCents,
         retail_price_cents: pricing.retailPriceCents,
+        compare_at_price_cents: compareAtPriceCents,
         last_synced_at: new Date().toISOString(),
       },
       { onConflict: "store_id,external_variant_id" },
@@ -159,5 +176,5 @@ export async function createMapping(db: SupabaseClient, params: CreateMappingPar
     .single();
   if (error || !data) throw new Error(`Could not create mapping: ${error?.message}`);
 
-  return { id: data.id as string, supplierCostCents: skuRow.supplier_cost_cents as number, retailPriceCents: pricing.retailPriceCents };
+  return { id: data.id as string, supplierCostCents, retailPriceCents: pricing.retailPriceCents, compareAtPriceCents };
 }

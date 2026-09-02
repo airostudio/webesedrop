@@ -33,6 +33,7 @@ create table stores (
   webhook_url    text,
   webhook_secret text, -- used to HMAC-sign outbound webhook payloads
   brand_voice    jsonb, -- optional BrandVoice config (see src/copy/rewriter.ts) — null means neutral default copy
+  settings       jsonb not null default '{}'::jsonb, -- StoreSettings (see src/domain/settings.ts) — pricing bounds/compare-at, import defaults, stock/sync behavior, shipping preference, notification toggles
   is_active      boolean not null default true,
   created_at     timestamptz not null default now(),
   updated_at     timestamptz not null default now()
@@ -112,6 +113,7 @@ create table product_mappings (
   on_brand_name           text,
   supplier_cost_cents     int not null,
   retail_price_cents      int not null,
+  compare_at_price_cents  int, -- optional strikethrough/compare-at price, computed from the store's pricing.compareAtRule setting (see src/domain/settings.ts) — null when unset
   is_active                boolean not null default true,
   last_synced_at           timestamptz not null default now(),
   created_at               timestamptz not null default now(),
