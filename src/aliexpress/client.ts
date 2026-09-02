@@ -90,25 +90,35 @@ export interface ExchangeAuthorizationCodeParams {
 
 /**
  * AliExpress's token endpoint validates mandatory system params one at a time on presence
- * (confirmed live: missing app_key errored first, then — once added — missing timestamp did),
- * so this sends the same TOP-platform system params every signed business call sends (see
- * AliExpressClient.call()'s systemParams) rather than bare OAuth2 client_id/client_secret.
+ * (confirmed live: missing app_key errored first, then — once added — missing timestamp, then
+ * missing sign), so this sends the full TOP-platform system param + signature convention every
+ * signed business call sends (see AliExpressClient.call()), not a bare OAuth2 exchange.
  */
 function topSystemParams(): { timestamp: string; sign_method: string; format: string; v: string } {
   return { timestamp: String(Date.now()), sign_method: "sha256", format: "json", v: "2.0" };
 }
 
+/** TOP-style signing: sort params by key, concatenate as `key1value1key2value2…`, HMAC-SHA256 with the app secret, hex uppercase. */
+function signTopParams(params: Record<string, string>, appSecret: string): string {
+  const base = Object.keys(params)
+    .sort()
+    .map((key) => `${key}${params[key]}`)
+    .join("");
+  return createHmac("sha256", appSecret).update(base, "utf8").digest("hex").toUpperCase();
+}
+
 /** One-time exchange of the `code` from the OAuth redirect for the initial ALIEXPRESS_ACCESS_TOKEN/ALIEXPRESS_REFRESH_TOKEN pair. */
 export async function exchangeAuthorizationCode(params: ExchangeAuthorizationCodeParams): Promise<TokenSet> {
   const fetchImpl = params.fetchImpl ?? fetch;
-  const query = new URLSearchParams({
+  const unsigned: Record<string, string> = {
     grant_type: "authorization_code",
     app_key: params.appKey,
     app_secret: params.appSecret,
     code: params.code,
     ...topSystemParams(),
     ...(params.redirectUri ? { redirect_uri: params.redirectUri } : {}),
-  });
+  };
+  const query = new URLSearchParams({ ...unsigned, sign: signTopParams(unsigned, params.appSecret) });
   const res = await fetchImpl(`${params.tokenUrl ?? DEFAULT_TOKEN_URL}?${query.toString()}`, { method: "POST" });
   return parseTokenResponse(res, "token_exchange_failed", "AliExpress did not return tokens for this authorization code");
 }
@@ -159,11 +169,7 @@ export class AliExpressClient {
 
   /** Exposed for testing/inspection; not part of the stable API surface. */
   sign(params: Record<string, string>): string {
-    const base = Object.keys(params)
-      .sort()
-      .map((key) => `${key}${params[key]}`)
-      .join("");
-    return createHmac("sha256", this.appSecret).update(base, "utf8").digest("hex").toUpperCase();
+    return signTopParams(params, this.appSecret);
   }
 
   private async call<T>(apiMethod: string, businessParams: Record<string, string>, attempt = 0): Promise<T> {
@@ -205,13 +211,14 @@ export class AliExpressClient {
 
   /** OAuth refresh-token exchange. Updates in-memory tokens and calls onTokenRefreshed so callers can persist them. */
   async refreshAccessToken(): Promise<TokenSet> {
-    const params = new URLSearchParams({
+    const unsigned: Record<string, string> = {
       grant_type: "refresh_token",
       app_key: this.appKey,
       app_secret: this.appSecret,
       refresh_token: this.refreshToken,
       ...topSystemParams(),
-    });
+    };
+    const params = new URLSearchParams({ ...unsigned, sign: signTopParams(unsigned, this.appSecret) });
     const res = await this.fetchImpl(`${this.tokenUrl}?${params.toString()}`, { method: "POST" });
     const tokens = await parseTokenResponse(res, "token_refresh_failed", "AliExpress token refresh did not return new tokens");
     this.accessToken = tokens.accessToken;
