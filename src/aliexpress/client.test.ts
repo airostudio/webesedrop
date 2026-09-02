@@ -187,7 +187,25 @@ describe("exchangeAuthorizationCode", () => {
     // and then "sign" as each prior fix landed.
     expect(requestedUrl.searchParams.get("timestamp")).toBeTruthy();
     expect(requestedUrl.searchParams.get("sign_method")).toBe("sha256");
-    expect(requestedUrl.searchParams.get("sign")).toMatch(/^[0-9A-F]+$/);
+    const sign = requestedUrl.searchParams.get("sign");
+    expect(sign).toMatch(/^[0-9A-F]+$/);
+    // app_secret must be excluded from the signed string — it's the HMAC key, not a signed field.
+    // Including it produced a live "IncompleteSignature" rejection from AliExpress.
+    const signedParams: Record<string, string> = {};
+    requestedUrl.searchParams.forEach((value, key) => {
+      if (key !== "sign" && key !== "app_secret") signedParams[key] = value;
+    });
+    const expectedSign = createHmac("sha256", "app-secret")
+      .update(
+        Object.keys(signedParams)
+          .sort()
+          .map((k) => `${k}${signedParams[k]}`)
+          .join(""),
+        "utf8",
+      )
+      .digest("hex")
+      .toUpperCase();
+    expect(sign).toBe(expectedSign);
   });
 
   it("throws AliExpressApiError when the exchange fails", async () => {
