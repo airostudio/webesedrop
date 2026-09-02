@@ -190,17 +190,21 @@ describe("exchangeAuthorizationCode", () => {
     const sign = requestedUrl.searchParams.get("sign");
     expect(sign).toMatch(/^[0-9A-F]+$/);
     // app_secret must be excluded from the signed string — it's the HMAC key, not a signed field.
-    // Including it produced a live "IncompleteSignature" rejection from AliExpress.
+    // Including it produced a live "IncompleteSignature" rejection from AliExpress. AliExpress's
+    // REST-style endpoints (anything under /rest/..., unlike the classic /sync gateway call() uses)
+    // also require the API path prepended to the signed string — confirmed live: omitting it still
+    // produced "IncompleteSignature" even with every param otherwise correct.
     const signedParams: Record<string, string> = {};
     requestedUrl.searchParams.forEach((value, key) => {
       if (key !== "sign" && key !== "app_secret") signedParams[key] = value;
     });
     const expectedSign = createHmac("sha256", "app-secret")
       .update(
-        Object.keys(signedParams)
-          .sort()
-          .map((k) => `${k}${signedParams[k]}`)
-          .join(""),
+        "/auth/token/create" +
+          Object.keys(signedParams)
+            .sort()
+            .map((k) => `${k}${signedParams[k]}`)
+            .join(""),
         "utf8",
       )
       .digest("hex")
