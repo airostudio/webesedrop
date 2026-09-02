@@ -88,6 +88,16 @@ export interface ExchangeAuthorizationCodeParams {
   fetchImpl?: typeof fetch;
 }
 
+/**
+ * AliExpress's token endpoint validates mandatory system params one at a time on presence
+ * (confirmed live: missing app_key errored first, then — once added — missing timestamp did),
+ * so this sends the same TOP-platform system params every signed business call sends (see
+ * AliExpressClient.call()'s systemParams) rather than bare OAuth2 client_id/client_secret.
+ */
+function topSystemParams(): { timestamp: string; sign_method: string; format: string; v: string } {
+  return { timestamp: String(Date.now()), sign_method: "sha256", format: "json", v: "2.0" };
+}
+
 /** One-time exchange of the `code` from the OAuth redirect for the initial ALIEXPRESS_ACCESS_TOKEN/ALIEXPRESS_REFRESH_TOKEN pair. */
 export async function exchangeAuthorizationCode(params: ExchangeAuthorizationCodeParams): Promise<TokenSet> {
   const fetchImpl = params.fetchImpl ?? fetch;
@@ -96,6 +106,7 @@ export async function exchangeAuthorizationCode(params: ExchangeAuthorizationCod
     app_key: params.appKey,
     app_secret: params.appSecret,
     code: params.code,
+    ...topSystemParams(),
     ...(params.redirectUri ? { redirect_uri: params.redirectUri } : {}),
   });
   const res = await fetchImpl(`${params.tokenUrl ?? DEFAULT_TOKEN_URL}?${query.toString()}`, { method: "POST" });
@@ -199,6 +210,7 @@ export class AliExpressClient {
       app_key: this.appKey,
       app_secret: this.appSecret,
       refresh_token: this.refreshToken,
+      ...topSystemParams(),
     });
     const res = await this.fetchImpl(`${this.tokenUrl}?${params.toString()}`, { method: "POST" });
     const tokens = await parseTokenResponse(res, "token_refresh_failed", "AliExpress token refresh did not return new tokens");
