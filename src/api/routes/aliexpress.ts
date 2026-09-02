@@ -1,7 +1,7 @@
 import type { FastifyInstance } from "fastify";
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { z } from "zod";
-import { buildAuthorizeUrl, exchangeAuthorizationCode } from "../../aliexpress/client";
+import { AliExpressApiError, buildAuthorizeUrl, exchangeAuthorizationCode } from "../../aliexpress/client";
 
 const connectSchema = z.object({ appKey: z.string().min(1), appSecret: z.string().min(1) });
 const callbackSchema = z.object({ code: z.string().min(1), redirectUri: z.string().min(1) });
@@ -78,6 +78,13 @@ export function registerAliExpressRoutes(app: FastifyInstance, db: SupabaseClien
         );
       return { connected: true };
     } catch (err) {
+      // Log the raw AliExpress response so a token-exchange failure is diagnosable from
+      // Vercel's runtime logs — the generic message alone doesn't say why AliExpress refused.
+      if (err instanceof AliExpressApiError) {
+        request.log.error({ aliexpressCode: err.code, aliexpressRaw: err.raw }, "AliExpress token exchange failed");
+      } else {
+        request.log.error({ err }, "AliExpress token exchange failed");
+      }
       return reply.code(502).send({ error: err instanceof Error ? err.message : "AliExpress token exchange failed" });
     }
   });
