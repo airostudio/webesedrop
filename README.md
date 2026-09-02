@@ -116,9 +116,16 @@ src/
                  markup, tiered-by-cost, each with a rounding mode
                  (.95 / .99 / .00 / none). Beach Footprints' pilot config
                  (35% + round up to .95) is just one percent_margin rule.
-  copy/          Buzzword-stripping + on-brand rewrite, LLM hook with an
-                 offline template fallback. Brand voice (descriptor words,
-                 section labels) is per-store config, not hardcoded —
+  copy/          Buzzword-stripping + on-brand rewrite. rewriteProductCopy()
+                 tries an injected CopyProvider (LLM) first, falling back to
+                 the offline template on any failure — ingestion never blocks
+                 on the LLM being down. claudeProvider.ts is the real
+                 implementation: reads the raw AliExpress listing and writes
+                 an SEO-friendly title + fresh on-brand description with
+                 Claude, wired in automatically by /v1/products/import
+                 whenever ANTHROPIC_API_KEY is set (see .env.example) — no
+                 code change needed to enable it. Brand voice (descriptor
+                 words, section labels) is per-store config, not hardcoded —
                  BEACH_FOOTPRINTS_VOICE is the reference config, not the
                  only one.
   domain/        The actual engine logic, DB-aware but store-schema-
