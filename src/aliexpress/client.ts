@@ -93,8 +93,8 @@ export async function exchangeAuthorizationCode(params: ExchangeAuthorizationCod
   const fetchImpl = params.fetchImpl ?? fetch;
   const query = new URLSearchParams({
     grant_type: "authorization_code",
-    client_id: params.appKey,
-    client_secret: params.appSecret,
+    app_key: params.appKey,
+    app_secret: params.appSecret,
     code: params.code,
     ...(params.redirectUri ? { redirect_uri: params.redirectUri } : {}),
   });
@@ -196,8 +196,8 @@ export class AliExpressClient {
   async refreshAccessToken(): Promise<TokenSet> {
     const params = new URLSearchParams({
       grant_type: "refresh_token",
-      client_id: this.appKey,
-      client_secret: this.appSecret,
+      app_key: this.appKey,
+      app_secret: this.appSecret,
       refresh_token: this.refreshToken,
     });
     const res = await this.fetchImpl(`${this.tokenUrl}?${params.toString()}`, { method: "POST" });

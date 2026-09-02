@@ -61,6 +61,11 @@ describe("AliExpressClient.getProductDetail", () => {
     expect(fetchImpl).toHaveBeenCalledTimes(3);
     expect(onTokenRefreshed).toHaveBeenCalledWith(expect.objectContaining({ accessToken: "new-token", refreshToken: "new-refresh" }));
     expect(detail.product_id).toBe("1005006123456");
+
+    // The refresh call (2nd fetch) must use AliExpress's app_key/app_secret param names, not OAuth2's client_id/client_secret.
+    const refreshUrl = new URL(fetchImpl.mock.calls[1][0] as string);
+    expect(refreshUrl.searchParams.get("app_key")).toBe("app-key");
+    expect(refreshUrl.searchParams.get("app_secret")).toBe("app-secret");
   });
 
   it("throws AliExpressApiError for a non-token error without retrying", async () => {
@@ -165,6 +170,12 @@ describe("exchangeAuthorizationCode", () => {
     const requestedUrl = new URL(fetchImpl.mock.calls[0][0] as string);
     expect(requestedUrl.searchParams.get("grant_type")).toBe("authorization_code");
     expect(requestedUrl.searchParams.get("code")).toBe("the-oauth-code");
+    // AliExpress's token endpoint wants app_key/app_secret (its TOP-platform convention), not
+    // OAuth2's client_id/client_secret — sending the wrong names fails with a live
+    // "MissingParameter: app_key" error that this test would have caught.
+    expect(requestedUrl.searchParams.get("app_key")).toBe("app-key");
+    expect(requestedUrl.searchParams.get("app_secret")).toBe("app-secret");
+    expect(requestedUrl.searchParams.get("client_id")).toBeNull();
   });
 
   it("throws AliExpressApiError when the exchange fails", async () => {
