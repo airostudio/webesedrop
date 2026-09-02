@@ -63,14 +63,15 @@ describe("AliExpressClient.getProductDetail", () => {
     expect(detail.product_id).toBe("1005006123456");
 
     // The refresh call (2nd fetch) must use AliExpress's app_key/app_secret param names, not OAuth2's
-    // client_id/client_secret, and the same TOP system params (timestamp, sign_method, etc.) every other
-    // AliExpress call sends — confirmed live: AliExpress rejects the token endpoint one missing param at a
-    // time ("app_key" first, then "timestamp" once that was fixed).
+    // client_id/client_secret, and the same TOP system params + signature every other AliExpress call
+    // sends — confirmed live: AliExpress rejects the token endpoint one missing param at a time
+    // ("app_key" first, then "timestamp", then "sign", each fixed in turn).
     const refreshUrl = new URL(fetchImpl.mock.calls[1][0] as string);
     expect(refreshUrl.searchParams.get("app_key")).toBe("app-key");
     expect(refreshUrl.searchParams.get("app_secret")).toBe("app-secret");
     expect(refreshUrl.searchParams.get("timestamp")).toBeTruthy();
     expect(refreshUrl.searchParams.get("sign_method")).toBe("sha256");
+    expect(refreshUrl.searchParams.get("sign")).toMatch(/^[0-9A-F]+$/);
   });
 
   it("throws AliExpressApiError for a non-token error without retrying", async () => {
@@ -181,11 +182,12 @@ describe("exchangeAuthorizationCode", () => {
     expect(requestedUrl.searchParams.get("app_key")).toBe("app-key");
     expect(requestedUrl.searchParams.get("app_secret")).toBe("app-secret");
     expect(requestedUrl.searchParams.get("client_id")).toBeNull();
-    // AliExpress also requires the same TOP system params (timestamp, sign_method, etc.) every other
-    // call sends — confirmed live: this endpoint validates mandatory params one at a time, and
-    // "timestamp" was the next one flagged missing once app_key/app_secret were fixed.
+    // AliExpress also requires the same TOP system params + signature every other call sends —
+    // confirmed live: this endpoint validates mandatory params one at a time, flagging "timestamp"
+    // and then "sign" as each prior fix landed.
     expect(requestedUrl.searchParams.get("timestamp")).toBeTruthy();
     expect(requestedUrl.searchParams.get("sign_method")).toBe("sha256");
+    expect(requestedUrl.searchParams.get("sign")).toMatch(/^[0-9A-F]+$/);
   });
 
   it("throws AliExpressApiError when the exchange fails", async () => {
