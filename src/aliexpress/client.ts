@@ -89,13 +89,12 @@ export interface ExchangeAuthorizationCodeParams {
 }
 
 /**
- * AliExpress's token endpoint validates mandatory system params one at a time on presence
- * (confirmed live: missing app_key errored first, then — once added — missing timestamp, then
- * missing sign), so this sends the full TOP-platform system param + signature convention every
- * signed business call sends (see AliExpressClient.call()), not a bare OAuth2 exchange.
+ * System params for AliExpress's REST-style token endpoint (/rest/auth/token/create), matching the
+ * shape confirmed against three independent open-source ports of AliExpress's own "iop" SDK
+ * (PHP, Dart, TypeScript) — see exchangeAuthorizationCode for the full citation.
  */
-function topSystemParams(): { timestamp: string; sign_method: string; format: string; v: string } {
-  return { timestamp: String(Date.now()), sign_method: "sha256", format: "json", v: "2.0" };
+function topSystemParams(): { timestamp: string; sign_method: string; simplify: string } {
+  return { timestamp: String(Date.now()), sign_method: "sha256", simplify: "true" };
 }
 
 /**
@@ -124,9 +123,13 @@ function restApiPath(tokenUrl: string): string {
 export async function exchangeAuthorizationCode(params: ExchangeAuthorizationCodeParams): Promise<TokenSet> {
   const fetchImpl = params.fetchImpl ?? fetch;
   const tokenUrl = params.tokenUrl ?? DEFAULT_TOKEN_URL;
-  // app_secret is the HMAC signing key, never a signed field itself — same as AliExpressClient.call()'s
-  // systemParams, which never includes it either. Signing it in produced AliExpress's live
-  // "IncompleteSignature" rejection.
+  // app_secret is ONLY the HMAC signing key — it must never be sent as a request param at all.
+  // Confirmed against three independent open-source ports of AliExpress's own "iop" SDK (PHP:
+  // luizsilva-dev/ae_php_sdk, Dart: aidanahram/aliexpress-sdk, TypeScript: moh3a/ae_sdk): app_secret
+  // is passed only to the local HMAC call, never inserted into the params object that gets sent.
+  // Sending it as a param (even while excluding it from the signed string) made AliExpress's own
+  // signature recomputation — over every param it actually received — diverge from ours, which is
+  // exactly what produced the live "IncompleteSignature" rejection every previous attempt hit.
   const signableParams: Record<string, string> = {
     grant_type: "authorization_code",
     app_key: params.appKey,
@@ -136,7 +139,6 @@ export async function exchangeAuthorizationCode(params: ExchangeAuthorizationCod
   };
   const query = new URLSearchParams({
     ...signableParams,
-    app_secret: params.appSecret,
     sign: signTopParams(signableParams, params.appSecret, restApiPath(tokenUrl)),
   });
   const res = await fetchImpl(`${tokenUrl}?${query.toString()}`, { method: "POST" });
@@ -231,7 +233,7 @@ export class AliExpressClient {
 
   /** OAuth refresh-token exchange. Updates in-memory tokens and calls onTokenRefreshed so callers can persist them. */
   async refreshAccessToken(): Promise<TokenSet> {
-    // app_secret is the HMAC signing key, never a signed field itself — see exchangeAuthorizationCode.
+    // app_secret is ONLY the HMAC signing key — never sent as a param. See exchangeAuthorizationCode.
     const signableParams: Record<string, string> = {
       grant_type: "refresh_token",
       app_key: this.appKey,
@@ -240,7 +242,6 @@ export class AliExpressClient {
     };
     const params = new URLSearchParams({
       ...signableParams,
-      app_secret: this.appSecret,
       sign: signTopParams(signableParams, this.appSecret, restApiPath(this.tokenUrl)),
     });
     const res = await this.fetchImpl(`${this.tokenUrl}?${params.toString()}`, { method: "POST" });
