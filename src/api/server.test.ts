@@ -81,6 +81,31 @@ describe("server: admin auth", () => {
     expect(res.statusCode).toBe(401);
   });
 
+  it("creates a store via POST /v1/admin/stores and returns its plaintext api key once", async () => {
+    const db = new FakeSupabase() as any;
+    const app = buildServer(db);
+
+    const res = await app.inject({
+      method: "POST",
+      url: "/v1/admin/stores",
+      headers: { authorization: "Bearer admin_test_key" },
+      payload: { name: "Beach Footprints", slug: "beach-footprints" },
+    });
+
+    expect(res.statusCode).toBe(201);
+    const body = res.json();
+    expect(body.slug).toBe("beach-footprints");
+    expect(body.apiKey).toMatch(/^dse_/);
+  });
+
+  it("rejects POST /v1/admin/stores without a valid admin key", async () => {
+    const db = new FakeSupabase() as any;
+    const app = buildServer(db);
+
+    const res = await app.inject({ method: "POST", url: "/v1/admin/stores", payload: { name: "x", slug: "x" } });
+    expect(res.statusCode).toBe(401);
+  });
+
   if (ORIGINAL_ADMIN_KEY !== undefined) process.env.ADMIN_API_KEY = ORIGINAL_ADMIN_KEY;
 });
 

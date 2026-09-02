@@ -16,11 +16,12 @@ Everything else — actually creating the product listing, writing the order, ru
 
 ## How a store connects
 
-1. **Provision the store** (operator action, not a public endpoint):
+1. **Provision the store** (operator action — either the CLI against the engine's own Supabase project, or the equivalent admin-key-gated endpoint):
    ```bash
    pnpm create-store -- --name="Beach Footprints" --slug=beach-footprints
+   # or: POST /v1/admin/stores { name, slug }  (Authorization: Bearer <ADMIN_API_KEY>)
    ```
-   Prints an API key once — store it in the connecting app's own secrets (e.g. Beach Footprints' `DROPSHIP_ENGINE_API_KEY`).
+   Prints/returns an API key once — store it in the connecting app's own secrets (e.g. Beach Footprints' `DROPSHIP_ENGINE_API_KEY`).
 
 2. **Connect an AliExpress account** (every store connects its own — dropshipping orders are placed, and paid for, under that account). With `ALIEXPRESS_APP_KEY`/`ALIEXPRESS_APP_SECRET` set on the engine (the platform's own AliExpress Open Platform app), a store just does steps 2–3 below — the owner logs into their own AliExpress account, nothing else to configure:
    ```
@@ -85,6 +86,7 @@ Everything above is a store's own view of itself. `/v1/admin/*` is the operator'
 ```
 GET  /v1/admin/overview          MRR, active/past-due subscriptions, domain count, orders + revenue this month
 GET  /v1/admin/stores            every store with plan, subscription status, MRR contribution, domain/order counts
+POST /v1/admin/stores            provision a new store (name, slug) -> { id, name, slug, apiKey }, shown once
 GET  /v1/admin/stores/:id        one store's full detail: domains, subscription, invoices, orders by status
 GET  /v1/admin/domains           the full cross-store domain log — every hostname it's installed on
 GET  /v1/admin/invoices          accounting ledger, filterable by store/status

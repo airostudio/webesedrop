@@ -4,6 +4,7 @@ import { z } from "zod";
 import { getOverviewStats, getPlanBreakdown, getOrdersTimeseries, getRevenueTimeseries, getStoreDetail, listInvoices, listStoresWithBilling } from "../../domain/admin";
 import { listAllDomains } from "../../domain/domains";
 import { createPlan, listPlans } from "../../domain/billing";
+import { createStore } from "../../domain/stores";
 
 const createPlanSchema = z.object({
   name: z.string().min(1),
@@ -12,6 +13,14 @@ const createPlanSchema = z.object({
   billingInterval: z.enum(["month", "year"]),
   stripePriceId: z.string().optional(),
   features: z.record(z.unknown()).optional(),
+});
+
+const createStoreSchema = z.object({
+  name: z.string().min(1),
+  slug: z
+    .string()
+    .min(1)
+    .regex(/^[a-z0-9-]+$/, "slug must be lowercase letters, numbers, and hyphens only"),
 });
 
 /**
@@ -24,6 +33,16 @@ export function registerAdminRoutes(app: FastifyInstance, db: SupabaseClient): v
   app.get("/v1/admin/overview", async () => getOverviewStats(db));
 
   app.get("/v1/admin/stores", async () => ({ stores: await listStoresWithBilling(db) }));
+
+  app.post("/v1/admin/stores", async (request, reply) => {
+    const parsed = createStoreSchema.safeParse(request.body);
+    if (!parsed.success) return reply.code(400).send({ error: parsed.error.flatten() });
+    try {
+      return reply.code(201).send(await createStore(db, parsed.data));
+    } catch (err) {
+      return reply.code(500).send({ error: err instanceof Error ? err.message : "Could not create store" });
+    }
+  });
 
   app.get<{ Params: { id: string } }>("/v1/admin/stores/:id", async (request, reply) => {
     const detail = await getStoreDetail(db, request.params.id);
