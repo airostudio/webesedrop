@@ -62,13 +62,14 @@ describe("AliExpressClient.getProductDetail", () => {
     expect(onTokenRefreshed).toHaveBeenCalledWith(expect.objectContaining({ accessToken: "new-token", refreshToken: "new-refresh" }));
     expect(detail.product_id).toBe("1005006123456");
 
-    // The refresh call (2nd fetch) must use AliExpress's app_key/app_secret param names, not OAuth2's
-    // client_id/client_secret, and the same TOP system params + signature every other AliExpress call
-    // sends — confirmed live: AliExpress rejects the token endpoint one missing param at a time
-    // ("app_key" first, then "timestamp", then "sign", each fixed in turn).
+    // The refresh call (2nd fetch) must use AliExpress's app_key param name, not OAuth2's client_id,
+    // and the same TOP system params + signature every other AliExpress call sends. app_secret must
+    // NOT be sent as a param at all — it's the HMAC key only; sending it (even unsigned) makes
+    // AliExpress's own signature recomputation diverge from ours, confirmed live as the cause of a
+    // persistent "IncompleteSignature" rejection across several earlier, incomplete fixes.
     const refreshUrl = new URL(fetchImpl.mock.calls[1][0] as string);
     expect(refreshUrl.searchParams.get("app_key")).toBe("app-key");
-    expect(refreshUrl.searchParams.get("app_secret")).toBe("app-secret");
+    expect(refreshUrl.searchParams.get("app_secret")).toBeNull();
     expect(refreshUrl.searchParams.get("timestamp")).toBeTruthy();
     expect(refreshUrl.searchParams.get("sign_method")).toBe("sha256");
     expect(refreshUrl.searchParams.get("sign")).toMatch(/^[0-9A-F]+$/);
@@ -176,11 +177,18 @@ describe("exchangeAuthorizationCode", () => {
     const requestedUrl = new URL(fetchImpl.mock.calls[0][0] as string);
     expect(requestedUrl.searchParams.get("grant_type")).toBe("authorization_code");
     expect(requestedUrl.searchParams.get("code")).toBe("the-oauth-code");
-    // AliExpress's token endpoint wants app_key/app_secret (its TOP-platform convention), not
-    // OAuth2's client_id/client_secret — sending the wrong names fails with a live
-    // "MissingParameter: app_key" error that this test would have caught.
+    // AliExpress's token endpoint wants app_key (its TOP-platform convention), not OAuth2's
+    // client_id — sending the wrong name fails with a live "MissingParameter: app_key" error this
+    // test would have caught. app_secret must NEVER be sent as a param, only used as the HMAC key —
+    // sending it (even excluded from the signed string) makes AliExpress's own signature
+    // recomputation over every param it actually received diverge from ours. This was the actual,
+    // final cause of a persistent live "IncompleteSignature" rejection across several earlier fixes
+    // that each looked plausible (wrong param names, missing system params, missing sign, signing
+    // app_secret in, missing the REST API path prefix) but didn't address the real bug: app_secret
+    // present as a param at all. Confirmed against 3 independent open-source ports of AliExpress's
+    // own "iop" SDK (PHP, Dart, TypeScript), which never insert it into the request.
     expect(requestedUrl.searchParams.get("app_key")).toBe("app-key");
-    expect(requestedUrl.searchParams.get("app_secret")).toBe("app-secret");
+    expect(requestedUrl.searchParams.get("app_secret")).toBeNull();
     expect(requestedUrl.searchParams.get("client_id")).toBeNull();
     // AliExpress also requires the same TOP system params + signature every other call sends —
     // confirmed live: this endpoint validates mandatory params one at a time, flagging "timestamp"
@@ -189,14 +197,11 @@ describe("exchangeAuthorizationCode", () => {
     expect(requestedUrl.searchParams.get("sign_method")).toBe("sha256");
     const sign = requestedUrl.searchParams.get("sign");
     expect(sign).toMatch(/^[0-9A-F]+$/);
-    // app_secret must be excluded from the signed string — it's the HMAC key, not a signed field.
-    // Including it produced a live "IncompleteSignature" rejection from AliExpress. AliExpress's
-    // REST-style endpoints (anything under /rest/..., unlike the classic /sync gateway call() uses)
-    // also require the API path prepended to the signed string — confirmed live: omitting it still
-    // produced "IncompleteSignature" even with every param otherwise correct.
+    // AliExpress's REST-style endpoints (anything under /rest/..., unlike the classic /sync gateway
+    // call() uses) require the API path prepended to the signed string too.
     const signedParams: Record<string, string> = {};
     requestedUrl.searchParams.forEach((value, key) => {
-      if (key !== "sign" && key !== "app_secret") signedParams[key] = value;
+      if (key !== "sign") signedParams[key] = value;
     });
     const expectedSign = createHmac("sha256", "app-secret")
       .update(
