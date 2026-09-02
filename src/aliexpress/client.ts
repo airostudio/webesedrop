@@ -110,15 +110,21 @@ function signTopParams(params: Record<string, string>, appSecret: string): strin
 /** One-time exchange of the `code` from the OAuth redirect for the initial ALIEXPRESS_ACCESS_TOKEN/ALIEXPRESS_REFRESH_TOKEN pair. */
 export async function exchangeAuthorizationCode(params: ExchangeAuthorizationCodeParams): Promise<TokenSet> {
   const fetchImpl = params.fetchImpl ?? fetch;
-  const unsigned: Record<string, string> = {
+  // app_secret is the HMAC signing key, never a signed field itself — same as AliExpressClient.call()'s
+  // systemParams, which never includes it either. Signing it in produced AliExpress's live
+  // "IncompleteSignature" rejection.
+  const signableParams: Record<string, string> = {
     grant_type: "authorization_code",
     app_key: params.appKey,
-    app_secret: params.appSecret,
     code: params.code,
     ...topSystemParams(),
     ...(params.redirectUri ? { redirect_uri: params.redirectUri } : {}),
   };
-  const query = new URLSearchParams({ ...unsigned, sign: signTopParams(unsigned, params.appSecret) });
+  const query = new URLSearchParams({
+    ...signableParams,
+    app_secret: params.appSecret,
+    sign: signTopParams(signableParams, params.appSecret),
+  });
   const res = await fetchImpl(`${params.tokenUrl ?? DEFAULT_TOKEN_URL}?${query.toString()}`, { method: "POST" });
   return parseTokenResponse(res, "token_exchange_failed", "AliExpress did not return tokens for this authorization code");
 }
@@ -211,14 +217,18 @@ export class AliExpressClient {
 
   /** OAuth refresh-token exchange. Updates in-memory tokens and calls onTokenRefreshed so callers can persist them. */
   async refreshAccessToken(): Promise<TokenSet> {
-    const unsigned: Record<string, string> = {
+    // app_secret is the HMAC signing key, never a signed field itself — see exchangeAuthorizationCode.
+    const signableParams: Record<string, string> = {
       grant_type: "refresh_token",
       app_key: this.appKey,
-      app_secret: this.appSecret,
       refresh_token: this.refreshToken,
       ...topSystemParams(),
     };
-    const params = new URLSearchParams({ ...unsigned, sign: signTopParams(unsigned, this.appSecret) });
+    const params = new URLSearchParams({
+      ...signableParams,
+      app_secret: this.appSecret,
+      sign: signTopParams(signableParams, this.appSecret),
+    });
     const res = await this.fetchImpl(`${this.tokenUrl}?${params.toString()}`, { method: "POST" });
     const tokens = await parseTokenResponse(res, "token_refresh_failed", "AliExpress token refresh did not return new tokens");
     this.accessToken = tokens.accessToken;
