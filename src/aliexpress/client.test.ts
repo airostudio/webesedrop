@@ -84,6 +84,35 @@ describe("AliExpressClient.getProductDetail", () => {
     await expect(client.getProductDetail("missing")).rejects.toBeInstanceOf(AliExpressApiError);
     expect(fetchImpl).toHaveBeenCalledTimes(1);
   });
+
+  it("handles a single SKU with a single property collapsed to a bare object (not an array)", async () => {
+    // AliExpress's gateway is XML-derived: a list with exactly one item comes back as a bare
+    // object instead of a 1-element array — this is the real shape that crashed `.map()` on
+    // `ae_sku_property_dtos` in production for single-variant products.
+    const fetchImpl = vi.fn().mockResolvedValue(
+      jsonResponse({
+        result: {
+          ae_item_base_info_dto: { product_id: "1005006999999", subject: "Solo Product", currency_code: "USD" },
+          ae_item_sku_info_dtos: {
+            ae_item_sku_info_d_t_o: {
+              sku_id: "12000099999999",
+              sku_price: "9.99",
+              sku_available_stock: 5,
+              ae_sku_property_dtos: { sku_property_id: 14, property_value_id: 200000343, property_value_definition_name: "Blue" },
+            },
+          },
+        },
+      }),
+    );
+    const client = new AliExpressClient({ ...CREDENTIALS, fetchImpl });
+
+    const detail = await client.getProductDetail("1005006999999");
+
+    expect(detail.ae_item_sku_info_dtos).toHaveLength(1);
+    expect(detail.ae_item_sku_info_dtos[0].sku_properties).toEqual([
+      { sku_property_id: 14, property_value_id: 200000343, property_value_definition_name: "Blue" },
+    ]);
+  });
 });
 
 describe("AliExpressClient.createOrder", () => {

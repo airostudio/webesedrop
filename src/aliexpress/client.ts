@@ -332,13 +332,28 @@ function unwrapResult(raw: Record<string, unknown>): Record<string, unknown> {
   return (result && typeof result === "object" ? (result as Record<string, unknown>) : raw) ?? {};
 }
 
+/**
+ * AliExpress's gateway is XML-derived: a "list" field comes back as `{ <item_key>: [...] }`
+ * normally, but collapses to a *bare single object* — not even a 1-element array — when there's
+ * only one item, and the wrapper itself is sometimes omitted entirely (the raw array/object sits
+ * directly on the field). Handles all three shapes so a product with a single SKU or a single
+ * variant property never crashes normalization.
+ */
+function toDtoList(value: unknown, itemKey: string): Record<string, unknown>[] {
+  if (Array.isArray(value)) return value as Record<string, unknown>[];
+  if (value && typeof value === "object") {
+    const inner = (value as Record<string, unknown>)[itemKey];
+    if (Array.isArray(inner)) return inner as Record<string, unknown>[];
+    if (inner && typeof inner === "object") return [inner as Record<string, unknown>];
+    return [value as Record<string, unknown>];
+  }
+  return [];
+}
+
 export function normalizeProductDetail(raw: Record<string, unknown>): AliExpressProductDetail {
   const result = unwrapResult(raw);
   const base = (result.ae_item_base_info_dto ?? result) as Record<string, unknown>;
-  const skuList =
-    ((result.ae_item_sku_info_dtos as Record<string, unknown>)?.ae_item_sku_info_d_t_o as unknown[]) ??
-    (result.ae_item_sku_info_dtos as unknown[]) ??
-    [];
+  const skuList = toDtoList(result.ae_item_sku_info_dtos, "ae_item_sku_info_d_t_o");
   const packageInfo = (result.package_info_dto ?? result.package_info) as Record<string, unknown> | undefined;
 
   return {
@@ -354,7 +369,7 @@ export function normalizeProductDetail(raw: Record<string, unknown>): AliExpress
       sku_available_stock: Number(sku.sku_available_stock ?? sku.ipm_sku_stock ?? 0),
       sku_code: sku.sku_code as string | undefined,
       currency_code: sku.currency_code as string | undefined,
-      sku_properties: (sku.ae_sku_property_dtos as Record<string, unknown>[] | undefined)?.map((p) => ({
+      sku_properties: toDtoList(sku.ae_sku_property_dtos, "ae_sku_property_d_t_o").map((p) => ({
         sku_property_id: Number(p.sku_property_id ?? 0),
         property_value_id: Number(p.property_value_id ?? 0),
         property_value_definition_name: String(p.property_value_definition_name ?? ""),
