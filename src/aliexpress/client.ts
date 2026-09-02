@@ -98,18 +98,32 @@ function topSystemParams(): { timestamp: string; sign_method: string; format: st
   return { timestamp: String(Date.now()), sign_method: "sha256", format: "json", v: "2.0" };
 }
 
-/** TOP-style signing: sort params by key, concatenate as `key1value1key2value2…`, HMAC-SHA256 with the app secret, hex uppercase. */
-function signTopParams(params: Record<string, string>, appSecret: string): string {
-  const base = Object.keys(params)
+/**
+ * TOP-style signing: sort params by key, concatenate as `key1value1key2value2…`, HMAC-SHA256 with
+ * the app secret, hex uppercase. `apiPath`, when given, is prepended to that string before hashing —
+ * required for AliExpress's newer REST-style endpoints (anything under `/rest/...`, per their
+ * official "iop" SDKs' signing convention), as opposed to the legacy `/sync` gateway `call()` uses,
+ * which signs params alone with no path prefix. Confirmed live: omitting it here produced AliExpress's
+ * "IncompleteSignature" rejection even with every param otherwise correct.
+ */
+function signTopParams(params: Record<string, string>, appSecret: string, apiPath = ""): string {
+  const base = apiPath + Object.keys(params)
     .sort()
     .map((key) => `${key}${params[key]}`)
     .join("");
   return createHmac("sha256", appSecret).update(base, "utf8").digest("hex").toUpperCase();
 }
 
+/** The `/rest/...` API path AliExpress's REST-style signing expects prepended to the signed string — the token URL's path, minus its leading `/rest` segment. */
+function restApiPath(tokenUrl: string): string {
+  const path = new URL(tokenUrl).pathname; // e.g. "/rest/auth/token/create"
+  return path.startsWith("/rest") ? path.slice("/rest".length) : path;
+}
+
 /** One-time exchange of the `code` from the OAuth redirect for the initial ALIEXPRESS_ACCESS_TOKEN/ALIEXPRESS_REFRESH_TOKEN pair. */
 export async function exchangeAuthorizationCode(params: ExchangeAuthorizationCodeParams): Promise<TokenSet> {
   const fetchImpl = params.fetchImpl ?? fetch;
+  const tokenUrl = params.tokenUrl ?? DEFAULT_TOKEN_URL;
   // app_secret is the HMAC signing key, never a signed field itself — same as AliExpressClient.call()'s
   // systemParams, which never includes it either. Signing it in produced AliExpress's live
   // "IncompleteSignature" rejection.
@@ -123,9 +137,9 @@ export async function exchangeAuthorizationCode(params: ExchangeAuthorizationCod
   const query = new URLSearchParams({
     ...signableParams,
     app_secret: params.appSecret,
-    sign: signTopParams(signableParams, params.appSecret),
+    sign: signTopParams(signableParams, params.appSecret, restApiPath(tokenUrl)),
   });
-  const res = await fetchImpl(`${params.tokenUrl ?? DEFAULT_TOKEN_URL}?${query.toString()}`, { method: "POST" });
+  const res = await fetchImpl(`${tokenUrl}?${query.toString()}`, { method: "POST" });
   return parseTokenResponse(res, "token_exchange_failed", "AliExpress did not return tokens for this authorization code");
 }
 
@@ -227,7 +241,7 @@ export class AliExpressClient {
     const params = new URLSearchParams({
       ...signableParams,
       app_secret: this.appSecret,
-      sign: signTopParams(signableParams, this.appSecret),
+      sign: signTopParams(signableParams, this.appSecret, restApiPath(this.tokenUrl)),
     });
     const res = await this.fetchImpl(`${this.tokenUrl}?${params.toString()}`, { method: "POST" });
     const tokens = await parseTokenResponse(res, "token_refresh_failed", "AliExpress token refresh did not return new tokens");
