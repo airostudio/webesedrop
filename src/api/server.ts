@@ -22,6 +22,12 @@ declare module "fastify" {
 // Public — no store or admin auth applies to these, ever.
 const PUBLIC_PATHS = new Set(["/v1/health", "/v1/billing/webhook"]);
 
+/** request.url is the raw path+query — strip the query before comparing against a route path. */
+function pathOnly(url: string): string {
+  const i = url.indexOf("?");
+  return i === -1 ? url : url.slice(0, i);
+}
+
 export function buildServer(db: SupabaseClient): FastifyInstance {
   const app = Fastify({ logger: process.env.NODE_ENV !== "test" });
 
@@ -39,7 +45,7 @@ export function buildServer(db: SupabaseClient): FastifyInstance {
   // Stash the pre-parse bytes for the webhook route (Stripe signs the exact raw
   // body), then hand the same bytes back downstream so JSON parsing still runs.
   app.addHook("preParsing", async (request, _reply, payload) => {
-    if (request.url !== "/v1/billing/webhook") return payload;
+    if (pathOnly(request.url) !== "/v1/billing/webhook") return payload;
     const chunks: Buffer[] = [];
     for await (const chunk of payload) chunks.push(chunk as Buffer);
     request.rawBody = Buffer.concat(chunks);
@@ -50,9 +56,10 @@ export function buildServer(db: SupabaseClient): FastifyInstance {
   app.get("/v1/health", async () => ({ status: "ok" }));
 
   app.addHook("onRequest", async (request, reply) => {
-    if (PUBLIC_PATHS.has(request.url) || !request.url.startsWith("/v1/")) return;
+    const url = pathOnly(request.url);
+    if (PUBLIC_PATHS.has(url) || !url.startsWith("/v1/")) return;
 
-    if (request.url.startsWith("/v1/admin/")) {
+    if (url.startsWith("/v1/admin/")) {
       if (!authenticateAdmin(request.headers.authorization)) {
         reply.code(401).send({ error: "Missing or invalid admin key. Send `Authorization: Bearer <ADMIN_API_KEY>`." });
         return reply;

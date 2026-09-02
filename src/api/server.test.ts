@@ -12,6 +12,13 @@ describe("server", () => {
     expect(res.json()).toEqual({ status: "ok" });
   });
 
+  it("responds to /v1/health without auth even with a query string appended (e.g. by a hosting rewrite)", async () => {
+    const app = buildServer(new FakeSupabase() as any);
+    const res = await app.inject({ method: "GET", url: "/v1/health?foo=bar" });
+    expect(res.statusCode).toBe(200);
+    expect(res.json()).toEqual({ status: "ok" });
+  });
+
   it("rejects a /v1/* request with no API key", async () => {
     const app = buildServer(new FakeSupabase() as any);
     const res = await app.inject({ method: "GET", url: "/v1/pricing-rules" });
