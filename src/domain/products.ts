@@ -48,6 +48,13 @@ export interface SkuOption {
   name: string | null;
   /** e.g. "Blue". */
   value: string;
+  /** The supplier's own image for this option, where it provides one (colour swatches usually have one). */
+  imageUrl: string | null;
+}
+
+export interface ProductAttribute {
+  name: string;
+  value: string;
 }
 
 export interface ImportedSku {
@@ -76,6 +83,8 @@ export interface ImportProductResult {
   productUnit: string | null;
   /** AliExpress's own category id, useful for mapping to a store taxonomy. */
   aliexpressCategoryId: number | null;
+  /** The supplier's specification table (Material, Style, Season…), ready for a store's specs tab. */
+  attributes: ProductAttribute[];
 }
 
 /**
@@ -129,6 +138,7 @@ export async function importProduct(
       options: (sku.sku_properties ?? []).map((p) => ({
         name: p.sku_property_name ?? null,
         value: p.property_value_definition_name,
+        imageUrl: p.sku_image ?? null,
       })),
     };
   });
@@ -146,6 +156,10 @@ export async function importProduct(
       : null,
     productUnit: detail.package_info?.product_unit ?? null,
     aliexpressCategoryId: detail.category_id ?? null,
+    attributes: (detail.attributes ?? []).map((attr) => ({
+      name: attr.attr_name,
+      value: attr.attr_value_unit ? `${attr.attr_value} ${attr.attr_value_unit}` : attr.attr_value,
+    })),
   };
 }
 

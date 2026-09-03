@@ -10,6 +10,13 @@ export interface AliExpressCredentials {
   refreshToken: string;
 }
 
+/** One row of the supplier's spec table, e.g. { attr_name: "Material", attr_value: "Rayon" }. */
+export interface AliExpressProductAttribute {
+  attr_name: string;
+  attr_value: string;
+  attr_value_unit?: string;
+}
+
 export interface AliExpressSkuProperty {
   sku_property_id: number;
   property_value_id: number;
@@ -17,6 +24,8 @@ export interface AliExpressSkuProperty {
   property_value_definition_name: string;
   /** The option's name, e.g. "Color" — needed to fill a store's option1_name/option2_name. */
   sku_property_name?: string;
+  /** Per-option image (a colour swatch's own photo), where the supplier provides one. */
+  sku_image?: string;
 }
 
 export interface AliExpressSku {
@@ -36,6 +45,8 @@ export interface AliExpressProductDetail {
   category_id?: number;
   currency_code: string;
   ae_item_sku_info_dtos: AliExpressSku[];
+  /** The supplier's specification table — Material, Style, Season and so on. */
+  attributes: AliExpressProductAttribute[];
   package_info?: {
     gross_weight?: string; // kg, decimal string
     product_unit?: string;

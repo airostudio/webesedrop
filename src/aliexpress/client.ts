@@ -387,17 +387,28 @@ export function normalizeProductDetail(raw: Record<string, unknown>): AliExpress
     image_urls: extractImageUrls(result, base),
     category_id: base.category_id as number | undefined,
     currency_code: String(base.currency_code ?? result.currency_code ?? "USD"),
+    attributes: toDtoList(result.ae_item_properties, "ae_item_property")
+      .map((attr) => ({
+        attr_name: String(attr.attr_name ?? ""),
+        attr_value: String(attr.attr_value ?? attr.attr_value_start ?? ""),
+        attr_value_unit: attr.attr_value_unit as string | undefined,
+      }))
+      .filter((attr) => attr.attr_name && attr.attr_value),
     ae_item_sku_info_dtos: (skuList as Record<string, unknown>[]).map((sku) => ({
       sku_id: String(sku.sku_id ?? ""),
       sku_price: String(sku.sku_price ?? sku.offer_sale_price ?? "0"),
       sku_available_stock: Number(sku.sku_available_stock ?? sku.ipm_sku_stock ?? 0),
       sku_code: sku.sku_code as string | undefined,
       currency_code: sku.currency_code as string | undefined,
-      sku_properties: toDtoList(sku.ae_sku_property_dtos, "ae_sku_property_d_t_o").map((p) => ({
+      // The gateway returns this list under either key depending on the response variant —
+      // `ae_sku_property_dtos` in the shape we see live, `aeop_s_k_u_propertys` per the published
+      // SDK types — so accept both rather than silently returning no options.
+      sku_properties: toDtoList(sku.ae_sku_property_dtos ?? sku.aeop_s_k_u_propertys, "ae_sku_property_d_t_o").map((p) => ({
         sku_property_id: Number(p.sku_property_id ?? 0),
         property_value_id: Number(p.property_value_id ?? 0),
         property_value_definition_name: String(p.property_value_definition_name ?? p.sku_property_value ?? ""),
         sku_property_name: (p.sku_property_name ?? p.sku_property_key) as string | undefined,
+        sku_image: p.sku_image as string | undefined,
       })),
     })),
     package_info: packageInfo
