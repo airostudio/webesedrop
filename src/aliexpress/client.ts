@@ -350,6 +350,30 @@ function toDtoList(value: unknown, itemKey: string): Record<string, unknown>[] {
   return [];
 }
 
+/**
+ * Product images live under `ae_multimedia_info_dto.image_urls` as a single ";"-separated
+ * string — NOT on `ae_item_base_info_dto`, which carries no image field at all. The other
+ * positions are accepted as fallbacks (including AliExpress's habit of splitting consecutive
+ * capitals, which turns `imageURLs` into `image_u_r_ls`), and a list is joined back into the
+ * ";"-separated form the rest of the pipeline expects.
+ */
+function extractImageUrls(result: Record<string, unknown>, base: Record<string, unknown>): string | undefined {
+  const multimedia = (result.ae_multimedia_info_dto ?? result.ae_multimedia_info) as Record<string, unknown> | undefined;
+  const candidate =
+    multimedia?.image_urls ??
+    multimedia?.image_u_r_ls ??
+    base.image_urls ??
+    base.image_u_r_ls ??
+    result.image_urls ??
+    result.image_u_r_ls;
+
+  if (Array.isArray(candidate)) {
+    const joined = candidate.filter(Boolean).map(String).join(";");
+    return joined || undefined;
+  }
+  return typeof candidate === "string" && candidate.trim() ? candidate : undefined;
+}
+
 export function normalizeProductDetail(raw: Record<string, unknown>): AliExpressProductDetail {
   const result = unwrapResult(raw);
   const base = (result.ae_item_base_info_dto ?? result) as Record<string, unknown>;
@@ -360,7 +384,7 @@ export function normalizeProductDetail(raw: Record<string, unknown>): AliExpress
     product_id: String(base.product_id ?? result.product_id ?? ""),
     subject: String(base.subject ?? result.subject ?? ""),
     detail: (base.detail ?? result.detail) as string | undefined,
-    image_urls: (base.image_urls ?? result.image_urls) as string | undefined,
+    image_urls: extractImageUrls(result, base),
     category_id: base.category_id as number | undefined,
     currency_code: String(base.currency_code ?? result.currency_code ?? "USD"),
     ae_item_sku_info_dtos: (skuList as Record<string, unknown>[]).map((sku) => ({
