@@ -85,6 +85,48 @@ describe("AliExpressClient.getProductDetail", () => {
     expect(fetchImpl).toHaveBeenCalledTimes(1);
   });
 
+  it("reads images from ae_multimedia_info_dto, where the real API puts them", async () => {
+    const fetchImpl = vi.fn().mockResolvedValue(jsonResponse(productGetFixture));
+    const client = new AliExpressClient({ ...CREDENTIALS, fetchImpl });
+
+    const detail = await client.getProductDetail("1005006123456");
+
+    expect(detail.image_urls).toBe("https://ae.example.com/img1.jpg;https://ae.example.com/img2.jpg");
+  });
+
+  it("falls back to other image positions, and joins a list into the ';'-separated form", async () => {
+    const fetchImpl = vi.fn().mockResolvedValue(
+      jsonResponse({
+        result: {
+          ae_item_base_info_dto: { product_id: "1", subject: "s", currency_code: "USD" },
+          // AliExpress splits consecutive capitals, so `imageURLs` can arrive as `image_u_r_ls`.
+          ae_multimedia_info_dto: { image_u_r_ls: ["https://a.example/1.jpg", "https://a.example/2.jpg"] },
+          ae_item_sku_info_dtos: { ae_item_sku_info_d_t_o: [] },
+        },
+      }),
+    );
+    const client = new AliExpressClient({ ...CREDENTIALS, fetchImpl });
+
+    const detail = await client.getProductDetail("1");
+
+    expect(detail.image_urls).toBe("https://a.example/1.jpg;https://a.example/2.jpg");
+  });
+
+  it("leaves image_urls undefined when the response genuinely has no images", async () => {
+    const fetchImpl = vi.fn().mockResolvedValue(
+      jsonResponse({
+        result: {
+          ae_item_base_info_dto: { product_id: "1", subject: "s", currency_code: "USD" },
+          ae_multimedia_info_dto: { image_urls: "" },
+          ae_item_sku_info_dtos: { ae_item_sku_info_d_t_o: [] },
+        },
+      }),
+    );
+    const client = new AliExpressClient({ ...CREDENTIALS, fetchImpl });
+
+    expect((await client.getProductDetail("1")).image_urls).toBeUndefined();
+  });
+
   it("handles a single SKU with a single property collapsed to a bare object (not an array)", async () => {
     // AliExpress's gateway is XML-derived: a list with exactly one item comes back as a bare
     // object instead of a 1-element array — this is the real shape that crashed `.map()` on
