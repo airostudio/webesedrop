@@ -1,0 +1,13 @@
+# Dependency build scripts approved to run during install.
+#
+# pnpm 10 only warned about unapproved build scripts; pnpm 11 makes them a hard
+# install failure (ERR_PNPM_IGNORED_BUILDS), which silently broke every Vercel
+# deploy the moment Vercel's default builder moved from pnpm 10 to 11. This file
+# is what `pnpm approve-builds` itself writes; verified to install cleanly under
+# both pnpm 10 and 11 with the lockfile unchanged.
+#
+# esbuild (via vitest/tsx) fetches its platform binary in a postinstall;
+# msgpackr-extract (via bullmq) builds an optional native accelerator.
+allowBuilds:
+  esbuild: true
+  msgpackr-extract: true
