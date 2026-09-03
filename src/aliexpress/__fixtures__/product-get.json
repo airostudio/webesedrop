@@ -56,7 +56,28 @@
       },
       "ae_multimedia_info_dto": {
         "image_urls": "https://ae.example.com/img1.jpg;https://ae.example.com/img2.jpg"
-      }
+      },
+      "ae_item_properties": [
+        {
+          "attr_name_id": 2,
+          "attr_name": "Material",
+          "attr_value_id": 100,
+          "attr_value": "Rayon"
+        },
+        {
+          "attr_name_id": 3,
+          "attr_name": "Style",
+          "attr_value_id": 101,
+          "attr_value": "Bohemian"
+        },
+        {
+          "attr_name_id": 4,
+          "attr_name": "Sleeve Length",
+          "attr_value_id": 102,
+          "attr_value": "34",
+          "attr_value_unit": "cm"
+        }
+      ]
     }
   }
 }

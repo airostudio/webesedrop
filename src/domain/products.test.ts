@@ -81,6 +81,21 @@ describe("importProduct", () => {
     expect(result.skus[0].options.map((o) => o.value)).toEqual(["Blue", "M"]);
   });
 
+  it("extracts the supplier's specification table, appending units to the value", async () => {
+    const db = new FakeSupabase() as any;
+    db.seed("stores", [{ id: STORE_ID, name: "Beach Footprints", brand_voice: null }]);
+    const fetchImpl = vi.fn().mockResolvedValue(jsonResponse(productGetFixture));
+    const client = new AliExpressClient({ ...CREDENTIALS, fetchImpl });
+
+    const result = await importProduct(db, client, { storeId: STORE_ID, aliexpressProductId: "1005006123456" });
+
+    expect(result.attributes).toEqual([
+      { name: "Material", value: "Rayon" },
+      { name: "Style", value: "Bohemian" },
+      { name: "Sleeve Length", value: "34 cm" },
+    ]);
+  });
+
   it("applies a neutral name when the store has no brand voice configured", async () => {
     const db = new FakeSupabase() as any;
     db.seed("stores", [{ id: STORE_ID, name: "Generic Store", brand_voice: null }]);
