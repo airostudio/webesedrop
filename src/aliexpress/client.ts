@@ -396,7 +396,8 @@ export function normalizeProductDetail(raw: Record<string, unknown>): AliExpress
       sku_properties: toDtoList(sku.ae_sku_property_dtos, "ae_sku_property_d_t_o").map((p) => ({
         sku_property_id: Number(p.sku_property_id ?? 0),
         property_value_id: Number(p.property_value_id ?? 0),
-        property_value_definition_name: String(p.property_value_definition_name ?? ""),
+        property_value_definition_name: String(p.property_value_definition_name ?? p.sku_property_value ?? ""),
+        sku_property_name: (p.sku_property_name ?? p.sku_property_key) as string | undefined,
       })),
     })),
     package_info: packageInfo
