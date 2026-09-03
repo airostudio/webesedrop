@@ -43,6 +43,13 @@ async function getBrandVoice(db: SupabaseClient, storeId: string): Promise<Brand
   return (data?.brand_voice as BrandVoice | undefined) ?? { storeName: (data?.name as string) ?? NEUTRAL_VOICE.storeName };
 }
 
+export interface SkuOption {
+  /** e.g. "Color" — may be absent when the supplier didn't name the property. */
+  name: string | null;
+  /** e.g. "Blue". */
+  value: string;
+}
+
 export interface ImportedSku {
   aliexpressSkuId: string;
   properties: string | null;
@@ -52,6 +59,8 @@ export interface ImportedSku {
   marginRate: number;
   /** Strikethrough/compare-at price, if the store configured pricing.compareAtRule — see src/domain/settings.ts. */
   compareAtPriceCents: number | null;
+  /** The variant's options as name/value pairs, so a store can fill option1_name/option1_value rather than parsing `properties`. */
+  options: SkuOption[];
 }
 
 export interface ImportProductResult {
@@ -61,6 +70,12 @@ export interface ImportProductResult {
   imageUrls: string[];
   currencyCode: string;
   skus: ImportedSku[];
+  /** Shipping weight from AliExpress's package info, in grams — a store needs it to rate shipping. */
+  packageWeightGrams: number | null;
+  /** The unit the supplier sells in (e.g. "piece"), for the store's own display. */
+  productUnit: string | null;
+  /** AliExpress's own category id, useful for mapping to a store taxonomy. */
+  aliexpressCategoryId: number | null;
 }
 
 /**
@@ -74,14 +89,22 @@ export async function importProduct(
   client: AliExpressClient,
   params: { storeId: string; aliexpressProductId: string; pricingRuleId?: string; copyProvider?: CopyProvider },
 ): Promise<ImportProductResult> {
-  const detail = await client.getProductDetail(params.aliexpressProductId);
+  const settings = await getStoreSettings(db, params.storeId);
+
+  // Quote in the currency the store actually sells in, for the market it sells to — otherwise
+  // every price and margin below is computed from a USD/US quote and silently wrong elsewhere.
+  const detail = await client.getProductDetail(params.aliexpressProductId, {
+    targetCurrency: settings.import.targetCurrency,
+    shipToCountry: settings.import.shipToCountry,
+  });
   await cacheAeProduct(db, detail);
 
+  // Precedence: an explicit rule for this import, else the store's configured markup, else the
+  // pricing_rules default row, else the engine default.
   const rule = params.pricingRuleId
     ? ((await db.from("pricing_rules").select("rule").eq("id", params.pricingRuleId).single()).data?.rule as PricingRule)
-    : await getDefaultPricingRule(db, params.storeId);
+    : (settings.pricing.rule ?? (await getDefaultPricingRule(db, params.storeId)));
   const voice = await getBrandVoice(db, params.storeId);
-  const settings = await getStoreSettings(db, params.storeId);
   const bounds: PriceBounds = { minPriceCents: settings.pricing.minPriceCents, maxPriceCents: settings.pricing.maxPriceCents };
 
   const { onBrandName, description } = await rewriteProductCopy(
@@ -103,6 +126,10 @@ export async function importProduct(
       retailPriceCents: pricing.retailPriceCents,
       marginRate: pricing.marginRate,
       compareAtPriceCents,
+      options: (sku.sku_properties ?? []).map((p) => ({
+        name: p.sku_property_name ?? null,
+        value: p.property_value_definition_name,
+      })),
     };
   });
 
@@ -111,8 +138,14 @@ export async function importProduct(
     onBrandName,
     description: formatStructuredDescription(description, voice),
     imageUrls: detail.image_urls ? detail.image_urls.split(";").map((u) => u.trim()).filter(Boolean) : [],
-    currencyCode: detail.currency_code,
+    // AliExpress echoes the requested target currency; fall back to what the store asked for.
+    currencyCode: detail.currency_code || settings.import.targetCurrency || "USD",
     skus,
+    packageWeightGrams: detail.package_info?.gross_weight
+      ? Math.round(parseFloat(detail.package_info.gross_weight) * 1000)
+      : null,
+    productUnit: detail.package_info?.product_unit ?? null,
+    aliexpressCategoryId: detail.category_id ?? null,
   };
 }
 

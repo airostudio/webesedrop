@@ -13,7 +13,10 @@ export interface AliExpressCredentials {
 export interface AliExpressSkuProperty {
   sku_property_id: number;
   property_value_id: number;
+  /** The option's value, e.g. "Blue". */
   property_value_definition_name: string;
+  /** The option's name, e.g. "Color" — needed to fill a store's option1_name/option2_name. */
+  sku_property_name?: string;
 }
 
 export interface AliExpressSku {

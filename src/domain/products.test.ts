@@ -29,6 +29,58 @@ describe("importProduct", () => {
     expect(db.rows("ae_product_skus")).toHaveLength(2);
   });
 
+  it("quotes AliExpress in the store's configured currency and destination", async () => {
+    const db = new FakeSupabase() as any;
+    db.seed("stores", [
+      {
+        id: STORE_ID,
+        name: "Beach Footprints",
+        brand_voice: null,
+        settings: { import: { defaultStatus: "draft", targetCurrency: "AUD", shipToCountry: "AU" } },
+      },
+    ]);
+    const fetchImpl = vi.fn().mockResolvedValue(jsonResponse(productGetFixture));
+    const client = new AliExpressClient({ ...CREDENTIALS, fetchImpl });
+
+    await importProduct(db, client, { storeId: STORE_ID, aliexpressProductId: "1005006123456" });
+
+    // The /sync gateway carries params in the form-encoded body, not the URL.
+    const body = String(fetchImpl.mock.calls[0][1].body);
+    expect(body).toContain("target_currency=AUD");
+    expect(body).toContain("ship_to_country=AU");
+  });
+
+  it("prices with the store's configured markup rule rather than the engine default", async () => {
+    const db = new FakeSupabase() as any;
+    db.seed("stores", [
+      {
+        id: STORE_ID,
+        name: "Beach Footprints",
+        brand_voice: null,
+        settings: { pricing: { rule: { type: "percent_margin", marginRate: 1.0, rounding: "none" } } },
+      },
+    ]);
+    const fetchImpl = vi.fn().mockResolvedValue(jsonResponse(productGetFixture));
+    const client = new AliExpressClient({ ...CREDENTIALS, fetchImpl });
+
+    const result = await importProduct(db, client, { storeId: STORE_ID, aliexpressProductId: "1005006123456" });
+    const inStock = result.skus.find((s) => s.aliexpressSkuId === "12000030123456789")!;
+    expect(inStock.retailPriceCents).toBe(3200); // 1600 cost at 100% markup, unrounded
+  });
+
+  it("returns shipping weight, unit and structured variant options for the store to use", async () => {
+    const db = new FakeSupabase() as any;
+    db.seed("stores", [{ id: STORE_ID, name: "Beach Footprints", brand_voice: null }]);
+    const fetchImpl = vi.fn().mockResolvedValue(jsonResponse(productGetFixture));
+    const client = new AliExpressClient({ ...CREDENTIALS, fetchImpl });
+
+    const result = await importProduct(db, client, { storeId: STORE_ID, aliexpressProductId: "1005006123456" });
+
+    expect(result.packageWeightGrams).toBe(350); // 0.35 kg in the fixture
+    expect(result.productUnit).toBe("piece");
+    expect(result.skus[0].options.map((o) => o.value)).toEqual(["Blue", "M"]);
+  });
+
   it("applies a neutral name when the store has no brand voice configured", async () => {
     const db = new FakeSupabase() as any;
     db.seed("stores", [{ id: STORE_ID, name: "Generic Store", brand_voice: null }]);

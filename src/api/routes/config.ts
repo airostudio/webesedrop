@@ -31,9 +31,17 @@ const storeSettingsSchema = z
         maxPriceCents: z.number().int().min(0).optional(),
         ignorePriceChangeBelowPercent: z.number().min(0).optional(),
         compareAtRule: pricingRuleUnionSchema.optional(),
+        rule: pricingRuleUnionSchema.optional(),
       })
       .optional(),
-    import: z.object({ defaultStatus: z.enum(["draft", "published"]) }).optional(),
+    import: z
+      .object({
+        defaultStatus: z.enum(["draft", "published"]),
+        // ISO 4217 / ISO 3166-1 alpha-2 — AliExpress rejects anything else.
+        targetCurrency: z.string().regex(/^[A-Z]{3}$/, "Use a 3-letter currency code, e.g. AUD").optional(),
+        shipToCountry: z.string().regex(/^[A-Z]{2}$/, "Use a 2-letter country code, e.g. AU").optional(),
+      })
+      .optional(),
     stock: z
       .object({
         outOfStockBehavior: z.enum(["mark_unavailable", "keep_visible"]),

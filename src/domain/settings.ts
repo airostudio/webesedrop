@@ -22,10 +22,28 @@ export interface StoreSettings {
     ignorePriceChangeBelowPercent?: number;
     /** Optional separate rule for a compare-at/strikethrough price, computed the same way as the main pricing rule but usually with a higher margin. Omit for no compare-at price. */
     compareAtRule?: PricingRule;
+    /**
+     * The markup applied to every imported SKU's supplier cost. Previously only settable by writing
+     * a row into `pricing_rules` directly, which made the single most important number in the whole
+     * import invisible to the store's admin. An explicit `pricingRuleId` on an import still wins.
+     */
+    rule?: PricingRule;
   };
   import: {
     /** Product status a newly imported product lands as. Defaults to "draft" — review before it goes live. */
     defaultStatus: "draft" | "published";
+    /**
+     * The currency the store sells in. AliExpress converts supplier prices to it, so every imported
+     * price — and the margin computed from it — is already in the currency customers are charged.
+     * Defaults to USD, matching the API's own default.
+     */
+    targetCurrency?: string;
+    /**
+     * Destination country for the price quote (ISO 3166-1 alpha-2). AliExpress prices vary by
+     * destination, so quoting against the market actually being sold to keeps the margin honest.
+     * Defaults to US, matching the API's own default.
+     */
+    shipToCountry?: string;
   };
   stock: {
     /**
@@ -58,7 +76,7 @@ export interface StoreSettings {
 
 export const DEFAULT_STORE_SETTINGS: StoreSettings = {
   pricing: {},
-  import: { defaultStatus: "draft" },
+  import: { defaultStatus: "draft", targetCurrency: "USD", shipToCountry: "US" },
   stock: { outOfStockBehavior: "mark_unavailable" },
   shipping: {},
   notifications: { priceChanged: true, outOfStock: true, restocked: true, orderShipped: true, orderDelivered: true, fulfillmentFailed: true },
