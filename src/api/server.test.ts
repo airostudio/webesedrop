@@ -38,6 +38,55 @@ describe("server", () => {
   });
 });
 
+describe("server: product mapping activation", () => {
+  function buildAuthedServer() {
+    const db = new FakeSupabase() as any;
+    const apiKey = generateApiKey();
+    db.seed("stores", [{ id: "store-1", name: "Beach Footprints", slug: "beach-footprints", api_key_hash: hashApiKey(apiKey), is_active: true }]);
+    return { db, app: buildServer(db), apiKey };
+  }
+
+  it("removes a product from the shop via PATCH isActive: false", async () => {
+    const { db, app, apiKey } = buildAuthedServer();
+    db.seed("product_mappings", [...db.rows("product_mappings"), { id: "mapping-1", store_id: "store-1", is_active: true }]);
+
+    const res = await app.inject({
+      method: "PATCH",
+      url: "/v1/products/mappings/mapping-1",
+      headers: { authorization: `Bearer ${apiKey}` },
+      payload: { isActive: false },
+    });
+
+    expect(res.statusCode).toBe(200);
+    expect(res.json()).toEqual({ id: "mapping-1", isActive: false });
+  });
+
+  it("404s rather than letting a store deactivate another store's mapping", async () => {
+    const { db, app, apiKey } = buildAuthedServer();
+    db.seed("product_mappings", [...db.rows("product_mappings"), { id: "mapping-1", store_id: "someone-elses-store", is_active: true }]);
+
+    const res = await app.inject({
+      method: "PATCH",
+      url: "/v1/products/mappings/mapping-1",
+      headers: { authorization: `Bearer ${apiKey}` },
+      payload: { isActive: false },
+    });
+
+    expect(res.statusCode).toBe(404);
+  });
+
+  it("rejects a non-boolean isActive", async () => {
+    const { app, apiKey } = buildAuthedServer();
+    const res = await app.inject({
+      method: "PATCH",
+      url: "/v1/products/mappings/mapping-1",
+      headers: { authorization: `Bearer ${apiKey}` },
+      payload: { isActive: "nope" },
+    });
+    expect(res.statusCode).toBe(400);
+  });
+});
+
 describe("server: admin auth", () => {
   const ORIGINAL_ADMIN_KEY = process.env.ADMIN_API_KEY;
   process.env.ADMIN_API_KEY = "admin_test_key";

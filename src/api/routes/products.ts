@@ -2,7 +2,7 @@ import type { FastifyInstance } from "fastify";
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { z } from "zod";
 import { getClientForStore } from "../../domain/connection";
-import { createMapping, importProduct } from "../../domain/products";
+import { createMapping, importProduct, setMappingActive } from "../../domain/products";
 
 const importSchema = z.object({ aliexpressProductId: z.string().min(1), pricingRuleId: z.string().uuid().optional() });
 const mappingSchema = z.object({
@@ -13,6 +13,7 @@ const mappingSchema = z.object({
   pricingRuleId: z.string().uuid().optional(),
   onBrandName: z.string().optional(),
 });
+const mappingActiveSchema = z.object({ isActive: z.boolean() });
 
 export function registerProductRoutes(app: FastifyInstance, db: SupabaseClient): void {
   /** Fetches + prices an AliExpress product for preview. Doesn't create anything the store didn't ask for — call /v1/products/mappings next for whichever SKUs you actually want to sell. */
@@ -50,5 +51,22 @@ export function registerProductRoutes(app: FastifyInstance, db: SupabaseClient):
       .eq("store_id", request.store.id)
       .eq("external_product_id", externalProductId);
     return { mappings: data ?? [] };
+  });
+
+  /**
+   * Removes a product from the shop (isActive: false) or brings one back
+   * (isActive: true) — the only update a mapping ever needs after creation.
+   * Scoped to the calling store's own mappings.
+   */
+  app.patch("/v1/products/mappings/:id", async (request, reply) => {
+    const parsed = mappingActiveSchema.safeParse(request.body);
+    if (!parsed.success) return reply.code(400).send({ error: parsed.error.flatten() });
+
+    const { id } = request.params as { id: string };
+    try {
+      return await setMappingActive(db, request.store.id, id, parsed.data.isActive);
+    } catch (err) {
+      return reply.code(404).send({ error: err instanceof Error ? err.message : "Mapping not found" });
+    }
   });
 }
