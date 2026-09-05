@@ -16,24 +16,29 @@ Everything else — actually creating the product listing, writing the order, ru
 
 ## How a store connects
 
-1. **Provision the store** (operator action, not a public endpoint):
+1. **Provision the store** (operator action — either the CLI against the engine's own Supabase project, or the equivalent admin-key-gated endpoint):
    ```bash
    pnpm create-store -- --name="Beach Footprints" --slug=beach-footprints
+   # or: POST /v1/admin/stores { name, slug }  (Authorization: Bearer <ADMIN_API_KEY>)
    ```
-   Prints an API key once — store it in the connecting app's own secrets (e.g. Beach Footprints' `DROPSHIP_ENGINE_API_KEY`).
+   Prints/returns an API key once — store it in the connecting app's own secrets (e.g. Beach Footprints' `DROPSHIP_ENGINE_API_KEY`).
 
-2. **Connect an AliExpress account** (every store connects its own — dropshipping orders are placed, and paid for, under that account):
+2. **Connect an AliExpress account** (every store connects its own — dropshipping orders are placed, and paid for, under that account). With `ALIEXPRESS_APP_KEY`/`ALIEXPRESS_APP_SECRET` set on the engine (the platform's own AliExpress Open Platform app), a store just does steps 2–3 below — the owner logs into their own AliExpress account, nothing else to configure:
    ```
-   POST /v1/aliexpress/connection      { appKey, appSecret }
-   GET  /v1/aliexpress/authorize-url?redirectUri=...   -> { authorizeUrl }
-   POST /v1/aliexpress/callback        { code, redirectUri }
+   POST /v1/aliexpress/connection      { appKey, appSecret }   -- optional: only if this store wants its own app instead of the platform's
+   GET  /v1/aliexpress/authorize-url?redirectUri=...   -> { authorizeUrl }   -- send the store owner here to log in
+   POST /v1/aliexpress/callback        { code, redirectUri }   -- exchange the code AliExpress redirected back with
+   GET  /v1/aliexpress/status          -> { connected, connectedAt }
    ```
 
-3. **Configure pricing and brand voice** (optional — sensible defaults apply without this):
+3. **Configure pricing, brand voice, and store settings** (all optional — sensible defaults apply without this):
    ```
    POST /v1/pricing-rules   { name, isDefault, rule: { type: "percent_margin" | "fixed_markup" | "tiered_margin", ... } }
    PUT  /v1/brand-voice     { storeName, descriptors?, styleLabel?, sectionLabels?, openingLine? }
+   GET  /v1/settings        -> { settings }  -- always returns every field, defaults filled in
+   PUT  /v1/settings        { pricing?, import?, stock?, shipping?, notifications? }  -- see src/domain/settings.ts
    ```
+   `settings` covers what every competing dropshipping tool (Ali2Woo, DSers, AliDropship, Zendrop, Spocket) exposes, plus a few gaps none of them do: a hard min/max price floor/ceiling (`pricing.minPriceCents`/`maxPriceCents`), a separate compare-at/strikethrough pricing rule (`pricing.compareAtRule`), a threshold to suppress noisy sub-percent price-sync webhooks (`pricing.ignorePriceChangeBelowPercent`), what happens to a listing when AliExpress reports it out of stock (`stock.outOfStockBehavior`: `mark_unavailable` | `keep_visible`) with its own noise threshold (`stock.ignoreStockChangeBelowUnits`), a default AliExpress logistics service (`shipping.preferredLogisticsService`), and a per-event on/off switch for every webhook type (`notifications.*`).
 
 4. **Register a webhook endpoint** to receive product/order events:
    ```
@@ -87,6 +92,7 @@ Everything above is a store's own view of itself. `/v1/admin/*` is the operator'
 ```
 GET  /v1/admin/overview          MRR, active/past-due subscriptions, domain count, orders + revenue this month
 GET  /v1/admin/stores            every store with plan, subscription status, MRR contribution, domain/order counts
+POST /v1/admin/stores            provision a new store (name, slug) -> { id, name, slug, apiKey }, shown once
 GET  /v1/admin/stores/:id        one store's full detail: domains, subscription, invoices, orders by status
 GET  /v1/admin/domains           the full cross-store domain log — every hostname it's installed on
 GET  /v1/admin/invoices          accounting ledger, filterable by store/status
@@ -116,9 +122,16 @@ src/
                  markup, tiered-by-cost, each with a rounding mode
                  (.95 / .99 / .00 / none). Beach Footprints' pilot config
                  (35% + round up to .95) is just one percent_margin rule.
-  copy/          Buzzword-stripping + on-brand rewrite, LLM hook with an
-                 offline template fallback. Brand voice (descriptor words,
-                 section labels) is per-store config, not hardcoded —
+  copy/          Buzzword-stripping + on-brand rewrite. rewriteProductCopy()
+                 tries an injected CopyProvider (LLM) first, falling back to
+                 the offline template on any failure — ingestion never blocks
+                 on the LLM being down. claudeProvider.ts is the real
+                 implementation: reads the raw AliExpress listing and writes
+                 an SEO-friendly title + fresh on-brand description with
+                 Claude, wired in automatically by /v1/products/import
+                 whenever ANTHROPIC_API_KEY is set (see .env.example) — no
+                 code change needed to enable it. Brand voice (descriptor
+                 words, section labels) is per-store config, not hardcoded —
                  BEACH_FOOTPRINTS_VOICE is the reference config, not the
                  only one.
   domain/        The actual engine logic, DB-aware but store-schema-
@@ -126,7 +139,11 @@ src/
                  (idempotent fulfillment), sync.ts (catalog + tracking
                  sync, across every store), webhooks.ts (signed delivery),
                  connection.ts (builds a per-store AliExpress client from
-                 its stored OAuth tokens, persisting refreshes).
+                 its stored OAuth tokens, persisting refreshes),
+                 settings.ts (per-store dropshipping settings — pricing
+                 bounds/compare-at, import defaults, stock/sync behavior,
+                 shipping preference, notification toggles — read by
+                 products.ts/sync.ts/orders.ts, not just stored and ignored).
   api/           Fastify REST API — one process, framework-light so it
                  runs anywhere (not Vercel-specific, no Next.js).
   worker/        BullMQ scheduler — catalog sync daily @ 02:00 UTC,

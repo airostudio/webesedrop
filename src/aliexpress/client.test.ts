@@ -61,6 +61,18 @@ describe("AliExpressClient.getProductDetail", () => {
     expect(fetchImpl).toHaveBeenCalledTimes(3);
     expect(onTokenRefreshed).toHaveBeenCalledWith(expect.objectContaining({ accessToken: "new-token", refreshToken: "new-refresh" }));
     expect(detail.product_id).toBe("1005006123456");
+
+    // The refresh call (2nd fetch) must use AliExpress's app_key param name, not OAuth2's client_id,
+    // and the same TOP system params + signature every other AliExpress call sends. app_secret must
+    // NOT be sent as a param at all — it's the HMAC key only; sending it (even unsigned) makes
+    // AliExpress's own signature recomputation diverge from ours, confirmed live as the cause of a
+    // persistent "IncompleteSignature" rejection across several earlier, incomplete fixes.
+    const refreshUrl = new URL(fetchImpl.mock.calls[1][0] as string);
+    expect(refreshUrl.searchParams.get("app_key")).toBe("app-key");
+    expect(refreshUrl.searchParams.get("app_secret")).toBeNull();
+    expect(refreshUrl.searchParams.get("timestamp")).toBeTruthy();
+    expect(refreshUrl.searchParams.get("sign_method")).toBe("sha256");
+    expect(refreshUrl.searchParams.get("sign")).toMatch(/^[0-9A-F]+$/);
   });
 
   it("throws AliExpressApiError for a non-token error without retrying", async () => {
@@ -71,6 +83,77 @@ describe("AliExpressClient.getProductDetail", () => {
 
     await expect(client.getProductDetail("missing")).rejects.toBeInstanceOf(AliExpressApiError);
     expect(fetchImpl).toHaveBeenCalledTimes(1);
+  });
+
+  it("reads images from ae_multimedia_info_dto, where the real API puts them", async () => {
+    const fetchImpl = vi.fn().mockResolvedValue(jsonResponse(productGetFixture));
+    const client = new AliExpressClient({ ...CREDENTIALS, fetchImpl });
+
+    const detail = await client.getProductDetail("1005006123456");
+
+    expect(detail.image_urls).toBe("https://ae.example.com/img1.jpg;https://ae.example.com/img2.jpg");
+  });
+
+  it("falls back to other image positions, and joins a list into the ';'-separated form", async () => {
+    const fetchImpl = vi.fn().mockResolvedValue(
+      jsonResponse({
+        result: {
+          ae_item_base_info_dto: { product_id: "1", subject: "s", currency_code: "USD" },
+          // AliExpress splits consecutive capitals, so `imageURLs` can arrive as `image_u_r_ls`.
+          ae_multimedia_info_dto: { image_u_r_ls: ["https://a.example/1.jpg", "https://a.example/2.jpg"] },
+          ae_item_sku_info_dtos: { ae_item_sku_info_d_t_o: [] },
+        },
+      }),
+    );
+    const client = new AliExpressClient({ ...CREDENTIALS, fetchImpl });
+
+    const detail = await client.getProductDetail("1");
+
+    expect(detail.image_urls).toBe("https://a.example/1.jpg;https://a.example/2.jpg");
+  });
+
+  it("leaves image_urls undefined when the response genuinely has no images", async () => {
+    const fetchImpl = vi.fn().mockResolvedValue(
+      jsonResponse({
+        result: {
+          ae_item_base_info_dto: { product_id: "1", subject: "s", currency_code: "USD" },
+          ae_multimedia_info_dto: { image_urls: "" },
+          ae_item_sku_info_dtos: { ae_item_sku_info_d_t_o: [] },
+        },
+      }),
+    );
+    const client = new AliExpressClient({ ...CREDENTIALS, fetchImpl });
+
+    expect((await client.getProductDetail("1")).image_urls).toBeUndefined();
+  });
+
+  it("handles a single SKU with a single property collapsed to a bare object (not an array)", async () => {
+    // AliExpress's gateway is XML-derived: a list with exactly one item comes back as a bare
+    // object instead of a 1-element array — this is the real shape that crashed `.map()` on
+    // `ae_sku_property_dtos` in production for single-variant products.
+    const fetchImpl = vi.fn().mockResolvedValue(
+      jsonResponse({
+        result: {
+          ae_item_base_info_dto: { product_id: "1005006999999", subject: "Solo Product", currency_code: "USD" },
+          ae_item_sku_info_dtos: {
+            ae_item_sku_info_d_t_o: {
+              sku_id: "12000099999999",
+              sku_price: "9.99",
+              sku_available_stock: 5,
+              ae_sku_property_dtos: { sku_property_id: 14, property_value_id: 200000343, property_value_definition_name: "Blue" },
+            },
+          },
+        },
+      }),
+    );
+    const client = new AliExpressClient({ ...CREDENTIALS, fetchImpl });
+
+    const detail = await client.getProductDetail("1005006999999");
+
+    expect(detail.ae_item_sku_info_dtos).toHaveLength(1);
+    expect(detail.ae_item_sku_info_dtos[0].sku_properties).toEqual([
+      { sku_property_id: 14, property_value_id: 200000343, property_value_definition_name: "Blue" },
+    ]);
   });
 });
 
@@ -165,6 +248,44 @@ describe("exchangeAuthorizationCode", () => {
     const requestedUrl = new URL(fetchImpl.mock.calls[0][0] as string);
     expect(requestedUrl.searchParams.get("grant_type")).toBe("authorization_code");
     expect(requestedUrl.searchParams.get("code")).toBe("the-oauth-code");
+    // AliExpress's token endpoint wants app_key (its TOP-platform convention), not OAuth2's
+    // client_id — sending the wrong name fails with a live "MissingParameter: app_key" error this
+    // test would have caught. app_secret must NEVER be sent as a param, only used as the HMAC key —
+    // sending it (even excluded from the signed string) makes AliExpress's own signature
+    // recomputation over every param it actually received diverge from ours. This was the actual,
+    // final cause of a persistent live "IncompleteSignature" rejection across several earlier fixes
+    // that each looked plausible (wrong param names, missing system params, missing sign, signing
+    // app_secret in, missing the REST API path prefix) but didn't address the real bug: app_secret
+    // present as a param at all. Confirmed against 3 independent open-source ports of AliExpress's
+    // own "iop" SDK (PHP, Dart, TypeScript), which never insert it into the request.
+    expect(requestedUrl.searchParams.get("app_key")).toBe("app-key");
+    expect(requestedUrl.searchParams.get("app_secret")).toBeNull();
+    expect(requestedUrl.searchParams.get("client_id")).toBeNull();
+    // AliExpress also requires the same TOP system params + signature every other call sends —
+    // confirmed live: this endpoint validates mandatory params one at a time, flagging "timestamp"
+    // and then "sign" as each prior fix landed.
+    expect(requestedUrl.searchParams.get("timestamp")).toBeTruthy();
+    expect(requestedUrl.searchParams.get("sign_method")).toBe("sha256");
+    const sign = requestedUrl.searchParams.get("sign");
+    expect(sign).toMatch(/^[0-9A-F]+$/);
+    // AliExpress's REST-style endpoints (anything under /rest/..., unlike the classic /sync gateway
+    // call() uses) require the API path prepended to the signed string too.
+    const signedParams: Record<string, string> = {};
+    requestedUrl.searchParams.forEach((value, key) => {
+      if (key !== "sign") signedParams[key] = value;
+    });
+    const expectedSign = createHmac("sha256", "app-secret")
+      .update(
+        "/auth/token/create" +
+          Object.keys(signedParams)
+            .sort()
+            .map((k) => `${k}${signedParams[k]}`)
+            .join(""),
+        "utf8",
+      )
+      .digest("hex")
+      .toUpperCase();
+    expect(sign).toBe(expectedSign);
   });
 
   it("throws AliExpressApiError when the exchange fails", async () => {

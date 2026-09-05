@@ -2,7 +2,8 @@ import type { FastifyInstance } from "fastify";
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { z } from "zod";
 import { getClientForStore } from "../../domain/connection";
-import { createMapping, importProduct, setMappingActive } from "../../domain/products";
+import { createMapping, importProduct } from "../../domain/products";
+import { getDefaultCopyProvider } from "../../copy/claudeProvider";
 
 const importSchema = z.object({ aliexpressProductId: z.string().min(1), pricingRuleId: z.string().uuid().optional() });
 const mappingSchema = z.object({
@@ -23,7 +24,7 @@ export function registerProductRoutes(app: FastifyInstance, db: SupabaseClient):
 
     try {
       const client = await getClientForStore(db, request.store.id);
-      const result = await importProduct(db, client, { storeId: request.store.id, ...parsed.data });
+      const result = await importProduct(db, client, { storeId: request.store.id, ...parsed.data, copyProvider: getDefaultCopyProvider() });
       return result;
     } catch (err) {
       return reply.code(502).send({ error: err instanceof Error ? err.message : "AliExpress product import failed" });

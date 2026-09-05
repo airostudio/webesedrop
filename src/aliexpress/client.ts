@@ -88,17 +88,60 @@ export interface ExchangeAuthorizationCodeParams {
   fetchImpl?: typeof fetch;
 }
 
+/**
+ * System params for AliExpress's REST-style token endpoint (/rest/auth/token/create), matching the
+ * shape confirmed against three independent open-source ports of AliExpress's own "iop" SDK
+ * (PHP, Dart, TypeScript) — see exchangeAuthorizationCode for the full citation.
+ */
+function topSystemParams(): { timestamp: string; sign_method: string; simplify: string } {
+  return { timestamp: String(Date.now()), sign_method: "sha256", simplify: "true" };
+}
+
+/**
+ * TOP-style signing: sort params by key, concatenate as `key1value1key2value2…`, HMAC-SHA256 with
+ * the app secret, hex uppercase. `apiPath`, when given, is prepended to that string before hashing —
+ * required for AliExpress's newer REST-style endpoints (anything under `/rest/...`, per their
+ * official "iop" SDKs' signing convention), as opposed to the legacy `/sync` gateway `call()` uses,
+ * which signs params alone with no path prefix. Confirmed live: omitting it here produced AliExpress's
+ * "IncompleteSignature" rejection even with every param otherwise correct.
+ */
+function signTopParams(params: Record<string, string>, appSecret: string, apiPath = ""): string {
+  const base = apiPath + Object.keys(params)
+    .sort()
+    .map((key) => `${key}${params[key]}`)
+    .join("");
+  return createHmac("sha256", appSecret).update(base, "utf8").digest("hex").toUpperCase();
+}
+
+/** The `/rest/...` API path AliExpress's REST-style signing expects prepended to the signed string — the token URL's path, minus its leading `/rest` segment. */
+function restApiPath(tokenUrl: string): string {
+  const path = new URL(tokenUrl).pathname; // e.g. "/rest/auth/token/create"
+  return path.startsWith("/rest") ? path.slice("/rest".length) : path;
+}
+
 /** One-time exchange of the `code` from the OAuth redirect for the initial ALIEXPRESS_ACCESS_TOKEN/ALIEXPRESS_REFRESH_TOKEN pair. */
 export async function exchangeAuthorizationCode(params: ExchangeAuthorizationCodeParams): Promise<TokenSet> {
   const fetchImpl = params.fetchImpl ?? fetch;
-  const query = new URLSearchParams({
+  const tokenUrl = params.tokenUrl ?? DEFAULT_TOKEN_URL;
+  // app_secret is ONLY the HMAC signing key — it must never be sent as a request param at all.
+  // Confirmed against three independent open-source ports of AliExpress's own "iop" SDK (PHP:
+  // luizsilva-dev/ae_php_sdk, Dart: aidanahram/aliexpress-sdk, TypeScript: moh3a/ae_sdk): app_secret
+  // is passed only to the local HMAC call, never inserted into the params object that gets sent.
+  // Sending it as a param (even while excluding it from the signed string) made AliExpress's own
+  // signature recomputation — over every param it actually received — diverge from ours, which is
+  // exactly what produced the live "IncompleteSignature" rejection every previous attempt hit.
+  const signableParams: Record<string, string> = {
     grant_type: "authorization_code",
-    client_id: params.appKey,
-    client_secret: params.appSecret,
+    app_key: params.appKey,
     code: params.code,
+    ...topSystemParams(),
     ...(params.redirectUri ? { redirect_uri: params.redirectUri } : {}),
+  };
+  const query = new URLSearchParams({
+    ...signableParams,
+    sign: signTopParams(signableParams, params.appSecret, restApiPath(tokenUrl)),
   });
-  const res = await fetchImpl(`${params.tokenUrl ?? DEFAULT_TOKEN_URL}?${query.toString()}`, { method: "POST" });
+  const res = await fetchImpl(`${tokenUrl}?${query.toString()}`, { method: "POST" });
   return parseTokenResponse(res, "token_exchange_failed", "AliExpress did not return tokens for this authorization code");
 }
 
@@ -148,11 +191,7 @@ export class AliExpressClient {
 
   /** Exposed for testing/inspection; not part of the stable API surface. */
   sign(params: Record<string, string>): string {
-    const base = Object.keys(params)
-      .sort()
-      .map((key) => `${key}${params[key]}`)
-      .join("");
-    return createHmac("sha256", this.appSecret).update(base, "utf8").digest("hex").toUpperCase();
+    return signTopParams(params, this.appSecret);
   }
 
   private async call<T>(apiMethod: string, businessParams: Record<string, string>, attempt = 0): Promise<T> {
@@ -194,11 +233,16 @@ export class AliExpressClient {
 
   /** OAuth refresh-token exchange. Updates in-memory tokens and calls onTokenRefreshed so callers can persist them. */
   async refreshAccessToken(): Promise<TokenSet> {
-    const params = new URLSearchParams({
+    // app_secret is ONLY the HMAC signing key — never sent as a param. See exchangeAuthorizationCode.
+    const signableParams: Record<string, string> = {
       grant_type: "refresh_token",
-      client_id: this.appKey,
-      client_secret: this.appSecret,
+      app_key: this.appKey,
       refresh_token: this.refreshToken,
+      ...topSystemParams(),
+    };
+    const params = new URLSearchParams({
+      ...signableParams,
+      sign: signTopParams(signableParams, this.appSecret, restApiPath(this.tokenUrl)),
     });
     const res = await this.fetchImpl(`${this.tokenUrl}?${params.toString()}`, { method: "POST" });
     const tokens = await parseTokenResponse(res, "token_refresh_failed", "AliExpress token refresh did not return new tokens");
@@ -288,32 +332,83 @@ function unwrapResult(raw: Record<string, unknown>): Record<string, unknown> {
   return (result && typeof result === "object" ? (result as Record<string, unknown>) : raw) ?? {};
 }
 
+/**
+ * AliExpress's gateway is XML-derived: a "list" field comes back as `{ <item_key>: [...] }`
+ * normally, but collapses to a *bare single object* — not even a 1-element array — when there's
+ * only one item, and the wrapper itself is sometimes omitted entirely (the raw array/object sits
+ * directly on the field). Handles all three shapes so a product with a single SKU or a single
+ * variant property never crashes normalization.
+ */
+function toDtoList(value: unknown, itemKey: string): Record<string, unknown>[] {
+  if (Array.isArray(value)) return value as Record<string, unknown>[];
+  if (value && typeof value === "object") {
+    const inner = (value as Record<string, unknown>)[itemKey];
+    if (Array.isArray(inner)) return inner as Record<string, unknown>[];
+    if (inner && typeof inner === "object") return [inner as Record<string, unknown>];
+    return [value as Record<string, unknown>];
+  }
+  return [];
+}
+
+/**
+ * Product images live under `ae_multimedia_info_dto.image_urls` as a single ";"-separated
+ * string — NOT on `ae_item_base_info_dto`, which carries no image field at all. The other
+ * positions are accepted as fallbacks (including AliExpress's habit of splitting consecutive
+ * capitals, which turns `imageURLs` into `image_u_r_ls`), and a list is joined back into the
+ * ";"-separated form the rest of the pipeline expects.
+ */
+function extractImageUrls(result: Record<string, unknown>, base: Record<string, unknown>): string | undefined {
+  const multimedia = (result.ae_multimedia_info_dto ?? result.ae_multimedia_info) as Record<string, unknown> | undefined;
+  const candidate =
+    multimedia?.image_urls ??
+    multimedia?.image_u_r_ls ??
+    base.image_urls ??
+    base.image_u_r_ls ??
+    result.image_urls ??
+    result.image_u_r_ls;
+
+  if (Array.isArray(candidate)) {
+    const joined = candidate.filter(Boolean).map(String).join(";");
+    return joined || undefined;
+  }
+  return typeof candidate === "string" && candidate.trim() ? candidate : undefined;
+}
+
 export function normalizeProductDetail(raw: Record<string, unknown>): AliExpressProductDetail {
   const result = unwrapResult(raw);
   const base = (result.ae_item_base_info_dto ?? result) as Record<string, unknown>;
-  const skuList =
-    ((result.ae_item_sku_info_dtos as Record<string, unknown>)?.ae_item_sku_info_d_t_o as unknown[]) ??
-    (result.ae_item_sku_info_dtos as unknown[]) ??
-    [];
+  const skuList = toDtoList(result.ae_item_sku_info_dtos, "ae_item_sku_info_d_t_o");
   const packageInfo = (result.package_info_dto ?? result.package_info) as Record<string, unknown> | undefined;
 
   return {
     product_id: String(base.product_id ?? result.product_id ?? ""),
     subject: String(base.subject ?? result.subject ?? ""),
     detail: (base.detail ?? result.detail) as string | undefined,
-    image_urls: (base.image_urls ?? result.image_urls) as string | undefined,
+    image_urls: extractImageUrls(result, base),
     category_id: base.category_id as number | undefined,
     currency_code: String(base.currency_code ?? result.currency_code ?? "USD"),
+    attributes: toDtoList(result.ae_item_properties, "ae_item_property")
+      .map((attr) => ({
+        attr_name: String(attr.attr_name ?? ""),
+        attr_value: String(attr.attr_value ?? attr.attr_value_start ?? ""),
+        attr_value_unit: attr.attr_value_unit as string | undefined,
+      }))
+      .filter((attr) => attr.attr_name && attr.attr_value),
     ae_item_sku_info_dtos: (skuList as Record<string, unknown>[]).map((sku) => ({
       sku_id: String(sku.sku_id ?? ""),
       sku_price: String(sku.sku_price ?? sku.offer_sale_price ?? "0"),
       sku_available_stock: Number(sku.sku_available_stock ?? sku.ipm_sku_stock ?? 0),
       sku_code: sku.sku_code as string | undefined,
       currency_code: sku.currency_code as string | undefined,
-      sku_properties: (sku.ae_sku_property_dtos as Record<string, unknown>[] | undefined)?.map((p) => ({
+      // The gateway returns this list under either key depending on the response variant —
+      // `ae_sku_property_dtos` in the shape we see live, `aeop_s_k_u_propertys` per the published
+      // SDK types — so accept both rather than silently returning no options.
+      sku_properties: toDtoList(sku.ae_sku_property_dtos ?? sku.aeop_s_k_u_propertys, "ae_sku_property_d_t_o").map((p) => ({
         sku_property_id: Number(p.sku_property_id ?? 0),
         property_value_id: Number(p.property_value_id ?? 0),
-        property_value_definition_name: String(p.property_value_definition_name ?? ""),
+        property_value_definition_name: String(p.property_value_definition_name ?? p.sku_property_value ?? ""),
+        sku_property_name: (p.sku_property_name ?? p.sku_property_key) as string | undefined,
+        sku_image: p.sku_image as string | undefined,
       })),
     })),
     package_info: packageInfo

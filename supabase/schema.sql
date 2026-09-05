@@ -33,6 +33,7 @@ create table stores (
   webhook_url    text,
   webhook_secret text, -- used to HMAC-sign outbound webhook payloads
   brand_voice    jsonb, -- optional BrandVoice config (see src/copy/rewriter.ts) — null means neutral default copy
+  settings       jsonb not null default '{}'::jsonb, -- StoreSettings (see src/domain/settings.ts) — pricing bounds/compare-at, import defaults, stock/sync behavior, shipping preference, notification toggles
   is_active      boolean not null default true,
   created_at     timestamptz not null default now(),
   updated_at     timestamptz not null default now()
@@ -41,10 +42,14 @@ create trigger trg_stores_updated_at before update on stores for each row execut
 
 -- Each store connects its own AliExpress account (dropshipping orders are
 -- placed — and paid for — under that account, so it can't be shared).
+-- app_key/app_secret are nullable: most stores use the engine's own platform
+-- app (ALIEXPRESS_APP_KEY/ALIEXPRESS_APP_SECRET env vars) and only log into
+-- their own AliExpress account during OAuth. A store only sets these if it
+-- registered its own AliExpress Open Platform app (POST /v1/aliexpress/connection).
 create table aliexpress_connections (
   store_id      uuid primary key references stores(id) on delete cascade,
-  app_key       text not null,
-  app_secret    text not null,
+  app_key       text,
+  app_secret    text,
   access_token  text,
   refresh_token text,
   connected_at  timestamptz,
@@ -108,6 +113,7 @@ create table product_mappings (
   on_brand_name           text,
   supplier_cost_cents     int not null,
   retail_price_cents      int not null,
+  compare_at_price_cents  int, -- optional strikethrough/compare-at price, computed from the store's pricing.compareAtRule setting (see src/domain/settings.ts) — null when unset
   is_active                boolean not null default true,
   last_synced_at           timestamptz not null default now(),
   created_at               timestamptz not null default now(),

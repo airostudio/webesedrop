@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { applyPricingRule, applyRounding, calculateRetailPrice, diffPriceChange, psychologicalRoundUp } from "./engine";
+import { applyPricingRule, applyRounding, calculateRetailPrice, clampPrice, diffPriceChange, psychologicalRoundUp } from "./engine";
 
 describe("psychologicalRoundUp", () => {
   it("rounds up to the nearest .95", () => {
@@ -55,6 +55,14 @@ describe("applyPricingRule", () => {
     expect(result.retailPriceCents).toBe(2195);
   });
 
+  it("clamps the computed price to the configured min/max bounds", () => {
+    const rule = { type: "percent_margin" as const, marginRate: 0.35, rounding: "up-95" as const };
+    expect(applyPricingRule(100, rule, { minPriceCents: 1000 }).retailPriceCents).toBe(1000);
+    expect(applyPricingRule(1000000, rule, { maxPriceCents: 5000 }).retailPriceCents).toBe(5000);
+    // Unclamped when within bounds.
+    expect(applyPricingRule(1600, rule, { minPriceCents: 500, maxPriceCents: 5000 }).retailPriceCents).toBe(2195);
+  });
+
   it("fixed_markup adds a flat amount and reports an effective margin rate", () => {
     const result = applyPricingRule(1000, { type: "fixed_markup", markupCents: 500, rounding: "none" });
     expect(result.rawRetailCents).toBe(1500);
@@ -89,5 +97,54 @@ describe("diffPriceChange", () => {
   it("reports no change when supplier cost is identical", () => {
     const diff = diffPriceChange({ variantId: "v1", previousCostCents: 1600, previousPriceCents: 2195, newSupplierCostCents: 1600, rule });
     expect(diff.changed).toBe(false);
+  });
+
+  it("suppresses changed when the price move is below ignoreChangeBelowPercent", () => {
+    // 1600 -> 1601 moves retail price by well under 1% — should be suppressed.
+    const diff = diffPriceChange({
+      variantId: "v1",
+      previousCostCents: 1600,
+      previousPriceCents: applyPricingRule(1600, rule).retailPriceCents,
+      newSupplierCostCents: 1601,
+      rule,
+      ignoreChangeBelowPercent: 5,
+    });
+    expect(diff.changed).toBe(false);
+  });
+
+  it("still flags changed when the price move exceeds ignoreChangeBelowPercent", () => {
+    const diff = diffPriceChange({
+      variantId: "v1",
+      previousCostCents: 1600,
+      previousPriceCents: applyPricingRule(1600, rule).retailPriceCents,
+      newSupplierCostCents: 3200,
+      rule,
+      ignoreChangeBelowPercent: 5,
+    });
+    expect(diff.changed).toBe(true);
+  });
+
+  it("clamps the recomputed price to bounds even when suppressing the change flag", () => {
+    const diff = diffPriceChange({
+      variantId: "v1",
+      previousCostCents: 1600,
+      previousPriceCents: 2195,
+      newSupplierCostCents: 100000,
+      rule,
+      bounds: { maxPriceCents: 5000 },
+    });
+    expect(diff.newPriceCents).toBe(5000);
+  });
+});
+
+describe("clampPrice", () => {
+  it("clamps to the floor and ceiling", () => {
+    expect(clampPrice(500, { minPriceCents: 1000 })).toBe(1000);
+    expect(clampPrice(50000, { maxPriceCents: 20000 })).toBe(20000);
+    expect(clampPrice(1500, { minPriceCents: 1000, maxPriceCents: 20000 })).toBe(1500);
+  });
+
+  it("is a no-op with no bounds", () => {
+    expect(clampPrice(1234)).toBe(1234);
   });
 });

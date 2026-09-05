@@ -83,7 +83,20 @@ export interface TieredMarginRule {
 
 export type PricingRule = PercentMarginRule | FixedMarkupRule | TieredMarginRule;
 
-export function applyPricingRule(supplierCostCents: number, rule: PricingRule): RetailPriceResult {
+export interface PriceBounds {
+  minPriceCents?: number;
+  maxPriceCents?: number;
+}
+
+/** Clamps a computed price to a store's configured floor/ceiling — a hard safety rail applied after rounding, so the final price may not exactly match the rounding mode once clamped. */
+export function clampPrice(cents: number, bounds?: PriceBounds): number {
+  let clamped = cents;
+  if (bounds?.minPriceCents !== undefined) clamped = Math.max(clamped, bounds.minPriceCents);
+  if (bounds?.maxPriceCents !== undefined) clamped = Math.min(clamped, bounds.maxPriceCents);
+  return clamped;
+}
+
+export function applyPricingRule(supplierCostCents: number, rule: PricingRule, bounds?: PriceBounds): RetailPriceResult {
   if (supplierCostCents < 0) throw new Error("supplierCostCents must be >= 0");
 
   let rawRetailCents: number;
@@ -113,7 +126,7 @@ export function applyPricingRule(supplierCostCents: number, rule: PricingRule): 
     supplierCostCents,
     marginRate: effectiveMarginRate,
     rawRetailCents,
-    retailPriceCents: applyRounding(rawRetailCents, rule.rounding),
+    retailPriceCents: clampPrice(applyRounding(rawRetailCents, rule.rounding), bounds),
   };
 }
 
@@ -127,15 +140,29 @@ export interface PriceChange {
   changed: boolean;
 }
 
-/** Compares a variant's stored cost/price against a freshly-fetched supplier cost, for the daily sync's price-log step. */
+/**
+ * Compares a variant's stored cost/price against a freshly-fetched supplier cost, for the daily
+ * sync's price-log step. `ignoreChangeBelowPercent`, when set, suppresses `changed` for a move
+ * smaller than that percentage of the previous price — filters the constant tiny cost
+ * fluctuations AliExpress suppliers make from triggering a price-change log/webhook every sync.
+ */
 export function diffPriceChange(params: {
   variantId: string;
   previousCostCents: number | null;
   previousPriceCents: number | null;
   newSupplierCostCents: number;
   rule: PricingRule;
+  bounds?: PriceBounds;
+  ignoreChangeBelowPercent?: number;
 }): PriceChange {
-  const { retailPriceCents, marginRate } = applyPricingRule(params.newSupplierCostCents, params.rule);
+  const { retailPriceCents, marginRate } = applyPricingRule(params.newSupplierCostCents, params.rule, params.bounds);
+
+  let changed = params.previousCostCents !== params.newSupplierCostCents;
+  if (changed && params.ignoreChangeBelowPercent !== undefined && params.previousPriceCents) {
+    const percentMoved = (Math.abs(retailPriceCents - params.previousPriceCents) / params.previousPriceCents) * 100;
+    if (percentMoved < params.ignoreChangeBelowPercent) changed = false;
+  }
+
   return {
     variantId: params.variantId,
     previousCostCents: params.previousCostCents,
@@ -143,7 +170,7 @@ export function diffPriceChange(params: {
     previousPriceCents: params.previousPriceCents,
     newPriceCents: retailPriceCents,
     marginRate,
-    changed: params.previousCostCents !== params.newSupplierCostCents,
+    changed,
   };
 }
 

@@ -54,4 +54,47 @@ describe("fulfillOrder", () => {
 
     vi.unstubAllGlobals();
   });
+
+  it("uses the store's preferredLogisticsService setting when the caller doesn't specify one", async () => {
+    const db = new FakeSupabase() as any;
+    db.seed("stores", [{ id: STORE_ID, settings: { shipping: { preferredLogisticsService: "EPACKET" } } }]);
+    seedStore(db);
+    const fetchImpl = vi.fn().mockResolvedValue(jsonResponse(orderCreateFixture));
+    vi.stubGlobal("fetch", fetchImpl);
+
+    await fulfillOrder(db, {
+      storeId: STORE_ID,
+      externalOrderId: "order-1",
+      shippingAddress: ADDRESS,
+      lineItems: [{ externalVariantId: "variant-1", quantity: 1 }],
+    });
+
+    const body = fetchImpl.mock.calls[0][1].body as URLSearchParams;
+    const dto = JSON.parse(body.get("param_place_order_request4_open_api_d_t_o")!);
+    expect(dto.product_items[0].logistics_service_name).toBe("EPACKET");
+
+    vi.unstubAllGlobals();
+  });
+
+  it("an explicit logisticsServiceName still overrides the store's preferred setting", async () => {
+    const db = new FakeSupabase() as any;
+    db.seed("stores", [{ id: STORE_ID, settings: { shipping: { preferredLogisticsService: "EPACKET" } } }]);
+    seedStore(db);
+    const fetchImpl = vi.fn().mockResolvedValue(jsonResponse(orderCreateFixture));
+    vi.stubGlobal("fetch", fetchImpl);
+
+    await fulfillOrder(db, {
+      storeId: STORE_ID,
+      externalOrderId: "order-1",
+      shippingAddress: ADDRESS,
+      lineItems: [{ externalVariantId: "variant-1", quantity: 1 }],
+      logisticsServiceName: "FEDEX_IE",
+    });
+
+    const body = fetchImpl.mock.calls[0][1].body as URLSearchParams;
+    const dto = JSON.parse(body.get("param_place_order_request4_open_api_d_t_o")!);
+    expect(dto.product_items[0].logistics_service_name).toBe("FEDEX_IE");
+
+    vi.unstubAllGlobals();
+  });
 });

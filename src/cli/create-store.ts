@@ -1,11 +1,12 @@
 // Provisions a new connected store and prints its API key ONCE (only the
 // hash is stored — there is no way to recover a lost key, only reissue one).
-// Not a public API endpoint on purpose: store creation is an operator
-// action, not something any caller with an API key should be able to do.
+// Operator action, not something any store's own API key can do — either run
+// this locally against the engine's Supabase project, or use the equivalent
+// ADMIN_API_KEY-gated POST /v1/admin/stores if you'd rather not run the CLI.
 //
 //   pnpm create-store -- --name="Beach Footprints" --slug=beach-footprints
 import { getDb } from "../db/client";
-import { generateApiKey, hashApiKey } from "../auth/apiKey";
+import { createStore } from "../domain/stores";
 
 function parseArgs(argv: string[]): Record<string, string> {
   const args: Record<string, string> = {};
@@ -25,20 +26,11 @@ async function main() {
   }
 
   const db = getDb();
-  const apiKey = generateApiKey();
-  const { data, error } = await db
-    .from("stores")
-    .insert({ name: args.name, slug: args.slug, api_key_hash: hashApiKey(apiKey) })
-    .select("id")
-    .single();
-  if (error || !data) {
-    console.error("Could not create store:", error?.message);
-    process.exit(1);
-  }
+  const store = await createStore(db, { name: args.name, slug: args.slug });
 
-  console.log(`Store created: ${data.id}`);
-  console.log(`\nAPI key (shown once — store it now):\n${apiKey}`);
-  console.log(`\nUse it as: Authorization: Bearer ${apiKey}`);
+  console.log(`Store created: ${store.id}`);
+  console.log(`\nAPI key (shown once — store it now):\n${store.apiKey}`);
+  console.log(`\nUse it as: Authorization: Bearer ${store.apiKey}`);
 }
 
 main().catch((err) => {

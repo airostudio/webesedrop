@@ -12,6 +12,13 @@ describe("server", () => {
     expect(res.json()).toEqual({ status: "ok" });
   });
 
+  it("responds to /v1/health without auth even with a query string appended (e.g. by a hosting rewrite)", async () => {
+    const app = buildServer(new FakeSupabase() as any);
+    const res = await app.inject({ method: "GET", url: "/v1/health?foo=bar" });
+    expect(res.statusCode).toBe(200);
+    expect(res.json()).toEqual({ status: "ok" });
+  });
+
   it("rejects a /v1/* request with no API key", async () => {
     const app = buildServer(new FakeSupabase() as any);
     const res = await app.inject({ method: "GET", url: "/v1/pricing-rules" });
@@ -38,52 +45,62 @@ describe("server", () => {
   });
 });
 
-describe("server: product mapping activation", () => {
-  function buildAuthedServer() {
-    const db = new FakeSupabase() as any;
+describe("server: settings", () => {
+  function seedStoreWithKey(db: FakeSupabase) {
     const apiKey = generateApiKey();
     db.seed("stores", [{ id: "store-1", name: "Beach Footprints", slug: "beach-footprints", api_key_hash: hashApiKey(apiKey), is_active: true }]);
-    return { db, app: buildServer(db), apiKey };
+    return apiKey;
   }
 
-  it("removes a product from the shop via PATCH isActive: false", async () => {
-    const { db, app, apiKey } = buildAuthedServer();
-    db.seed("product_mappings", [...db.rows("product_mappings"), { id: "mapping-1", store_id: "store-1", is_active: true }]);
+  it("GET returns full defaults for a store that never configured settings", async () => {
+    const db = new FakeSupabase() as any;
+    const apiKey = seedStoreWithKey(db);
+    const app = buildServer(db);
 
-    const res = await app.inject({
-      method: "PATCH",
-      url: "/v1/products/mappings/mapping-1",
-      headers: { authorization: `Bearer ${apiKey}` },
-      payload: { isActive: false },
-    });
-
+    const res = await app.inject({ method: "GET", url: "/v1/settings", headers: { authorization: `Bearer ${apiKey}` } });
     expect(res.statusCode).toBe(200);
-    expect(res.json()).toEqual({ id: "mapping-1", isActive: false });
+    expect(res.json().settings.stock.outOfStockBehavior).toBe("mark_unavailable");
+    expect(res.json().settings.notifications.priceChanged).toBe(true);
   });
 
-  it("404s rather than letting a store deactivate another store's mapping", async () => {
-    const { db, app, apiKey } = buildAuthedServer();
-    db.seed("product_mappings", [...db.rows("product_mappings"), { id: "mapping-1", store_id: "someone-elses-store", is_active: true }]);
+  it("PUT patches a section and GET reflects it", async () => {
+    const db = new FakeSupabase() as any;
+    const apiKey = seedStoreWithKey(db);
+    const app = buildServer(db);
 
-    const res = await app.inject({
-      method: "PATCH",
-      url: "/v1/products/mappings/mapping-1",
+    const put = await app.inject({
+      method: "PUT",
+      url: "/v1/settings",
       headers: { authorization: `Bearer ${apiKey}` },
-      payload: { isActive: false },
+      payload: { pricing: { minPriceCents: 1500, maxPriceCents: 9900 } },
     });
+    expect(put.statusCode).toBe(200);
+    expect(put.json().settings.pricing.minPriceCents).toBe(1500);
 
-    expect(res.statusCode).toBe(404);
+    const get = await app.inject({ method: "GET", url: "/v1/settings", headers: { authorization: `Bearer ${apiKey}` } });
+    expect(get.json().settings.pricing.minPriceCents).toBe(1500);
+    expect(get.json().settings.pricing.maxPriceCents).toBe(9900);
   });
 
-  it("rejects a non-boolean isActive", async () => {
-    const { app, apiKey } = buildAuthedServer();
+  it("rejects minPriceCents greater than maxPriceCents", async () => {
+    const db = new FakeSupabase() as any;
+    const apiKey = seedStoreWithKey(db);
+    const app = buildServer(db);
+
     const res = await app.inject({
-      method: "PATCH",
-      url: "/v1/products/mappings/mapping-1",
+      method: "PUT",
+      url: "/v1/settings",
       headers: { authorization: `Bearer ${apiKey}` },
-      payload: { isActive: "nope" },
+      payload: { pricing: { minPriceCents: 5000, maxPriceCents: 1000 } },
     });
     expect(res.statusCode).toBe(400);
+  });
+
+  it("requires a store API key", async () => {
+    const db = new FakeSupabase() as any;
+    const app = buildServer(db);
+    const res = await app.inject({ method: "GET", url: "/v1/settings" });
+    expect(res.statusCode).toBe(401);
   });
 });
 
@@ -120,6 +137,31 @@ describe("server: admin auth", () => {
     const app = buildServer(db);
 
     const res = await app.inject({ method: "GET", url: "/v1/admin/stores", headers: { authorization: `Bearer ${apiKey}` } });
+    expect(res.statusCode).toBe(401);
+  });
+
+  it("creates a store via POST /v1/admin/stores and returns its plaintext api key once", async () => {
+    const db = new FakeSupabase() as any;
+    const app = buildServer(db);
+
+    const res = await app.inject({
+      method: "POST",
+      url: "/v1/admin/stores",
+      headers: { authorization: "Bearer admin_test_key" },
+      payload: { name: "Beach Footprints", slug: "beach-footprints" },
+    });
+
+    expect(res.statusCode).toBe(201);
+    const body = res.json();
+    expect(body.slug).toBe("beach-footprints");
+    expect(body.apiKey).toMatch(/^dse_/);
+  });
+
+  it("rejects POST /v1/admin/stores without a valid admin key", async () => {
+    const db = new FakeSupabase() as any;
+    const app = buildServer(db);
+
+    const res = await app.inject({ method: "POST", url: "/v1/admin/stores", payload: { name: "x", slug: "x" } });
     expect(res.statusCode).toBe(401);
   });
 
