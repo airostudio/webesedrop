@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import { AliExpressClient } from "../aliexpress/client";
-import { createMapping, importProduct } from "./products";
+import { createMapping, importProduct, setMappingActive } from "./products";
 import { FakeSupabase } from "./__tests__/fake-db";
 import productGetFixture from "../aliexpress/__fixtures__/product-get.json";
 
@@ -195,5 +195,38 @@ describe("createMapping", () => {
     await expect(
       createMapping(db, { storeId: STORE_ID, externalProductId: "p", externalVariantId: "v", aliexpressProductId: "missing", aliexpressSkuId: "missing" }),
     ).rejects.toThrow(/Unknown AliExpress SKU/);
+  });
+});
+
+describe("setMappingActive", () => {
+  it("deactivates a mapping — removing it from the shop", async () => {
+    const db = new FakeSupabase() as any;
+    db.seed("product_mappings", [{ id: "mapping-1", store_id: STORE_ID, is_active: true }]);
+
+    const result = await setMappingActive(db, STORE_ID, "mapping-1", false);
+
+    expect(result).toEqual({ id: "mapping-1", isActive: false });
+    expect(db.rows("product_mappings")[0].is_active).toBe(false);
+  });
+
+  it("reactivates a mapping — adding it back into the shop", async () => {
+    const db = new FakeSupabase() as any;
+    db.seed("product_mappings", [{ id: "mapping-1", store_id: STORE_ID, is_active: false }]);
+
+    const result = await setMappingActive(db, STORE_ID, "mapping-1", true);
+    expect(result.isActive).toBe(true);
+  });
+
+  it("throws rather than touching a mapping owned by a different store", async () => {
+    const db = new FakeSupabase() as any;
+    db.seed("product_mappings", [{ id: "mapping-1", store_id: "other-store", is_active: true }]);
+
+    await expect(setMappingActive(db, STORE_ID, "mapping-1", false)).rejects.toThrow(/not found/i);
+    expect(db.rows("product_mappings")[0].is_active).toBe(true);
+  });
+
+  it("throws for an unknown mapping id", async () => {
+    const db = new FakeSupabase() as any;
+    await expect(setMappingActive(db, STORE_ID, "does-not-exist", false)).rejects.toThrow(/not found/i);
   });
 });

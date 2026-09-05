@@ -50,9 +50,12 @@ Everything else — actually creating the product listing, writing the order, ru
    ```
    POST /v1/products/import      { aliexpressProductId, pricingRuleId? }
      -> { onBrandName, description, imageUrls, skus: [{ aliexpressSkuId, supplierCostCents, retailPriceCents, stockOnHand, ... }] }
-   POST /v1/products/mappings    { externalProductId, externalVariantId, aliexpressProductId, aliexpressSkuId }
+   POST  /v1/products/mappings    { externalProductId, externalVariantId, aliexpressProductId, aliexpressSkuId }
      -> { id, supplierCostCents, retailPriceCents }
-   GET  /v1/products/mappings/:externalProductId
+   GET   /v1/products/mappings/:externalProductId
+   PATCH /v1/products/mappings/:id   { isActive }
+     -> { id, isActive }   removes a product from the shop (isActive: false) or brings one back (true) — the
+        only update a mapping needs after creation; catalog sync also flips this automatically on stock changes
 
    POST /v1/orders/fulfill       { externalOrderId, shippingAddress, lineItems: [{ externalVariantId, quantity }] }
      -> { orderId, skipped, aliexpressOrderId, fulfillmentStatus }   (idempotent — retry-safe)

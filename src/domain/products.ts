@@ -163,6 +163,28 @@ export async function importProduct(
   };
 }
 
+/**
+ * Toggles whether a mapping is active — i.e. whether the store is currently
+ * selling it. This is the only way a store removes a product from its shop
+ * (isActive: false) or brings one back (isActive: true, e.g. after pausing
+ * it or after catalog sync auto-deactivated it for being out of stock).
+ * Scoped to the calling store so one store can never touch another's
+ * mapping. Deliberately a toggle, not a delete: product_price_log rows
+ * reference this mapping and would be orphaned/cascade-deleted otherwise.
+ */
+export async function setMappingActive(db: SupabaseClient, storeId: string, mappingId: string, isActive: boolean): Promise<{ id: string; isActive: boolean }> {
+  const { data, error } = await db
+    .from("product_mappings")
+    .update({ is_active: isActive })
+    .eq("id", mappingId)
+    .eq("store_id", storeId)
+    .select("id, is_active")
+    .maybeSingle();
+  if (error) throw new Error(`Could not update mapping: ${error.message}`);
+  if (!data) throw new Error("Mapping not found");
+  return { id: data.id as string, isActive: data.is_active as boolean };
+}
+
 export interface CreateMappingParams {
   storeId: string;
   externalProductId: string;
